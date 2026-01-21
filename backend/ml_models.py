@@ -1,407 +1,442 @@
-"""backend/ml_models.py
+"""
+backend/ml_models.py
 
-ML module for the capstone.
+Offline ML experiments + artifacts for the Basketball Strategy backend.
 
-This file is designed to address:
-- "Default model used without checking if it fits"
-- "Pipeline to process input and cleaning raw data is not demonstrated"
-- "Not enough AI model testing done"
-- "Model requires substantial training before expandability"
+This module exists to directly satisfy committee feedback:
+- “Default model is used without checking if it fits the problem.”
+- “Not enough AI model testing done.”
+- “Pipeline to process input and cleaning raw data is not demonstrated.”
+- “The team failed to defend the use of the model.”
 
 What this file provides:
-1) A **reproducible ML pipeline**:
-   - Loads the same Synergy snapshot used by the app
-   - Aggregates to team-level (via BaselineRecommender)
-   - Builds a supervised dataset for OFFENSE PPP prediction
-   - Trains ML models using a scikit-learn Pipeline (imputation + one-hot encoding)
+1) A reproducible modeling dataset built from the SAME preprocessing pipeline as baseline_recommender.py
+2) Season-holdout evaluation (train on earlier seasons, test on later seasons)
+3) Metrics: RMSE, MAE, R² (mean ± std across holdout seasons)
+4) Optional paired t-test across holdout folds (RF vs baseline by default)
+5) A saved ML artifact file USED BY CONTEXT SIMULATOR:
+   backend/data/ml_offense_ppp_predictions.csv
+   Columns: SEASON, TEAM_ABBREVIATION, PLAY_TYPE, PPP_ML
 
-2) **Season holdout evaluation** (time-like validation):
-   - Trains on earlier seasons, tests on a later season
-   - Produces per-fold RMSE/MAE/R2 metrics
+IMPORTANT (consistency fix):
+- The Context Simulator should use the BEST model (as proven by holdout).
+- Previously, the artifact was always generated with RandomForest.
+- Now, we select the best ML model by holdout RMSE and generate the artifact with that model.
 
-3) Exports the file used by the Context+ML endpoint:
-   - backend/data/ml_offense_ppp_predictions.csv
-   - Columns: SEASON, TEAM_ABBREVIATION, PLAY_TYPE, PPP_ML
-
-Important scope note:
-- This is not claiming to be a perfect NBA model.
-- It is a defendable and reproducible demonstration of:
-  data -> preprocessing -> training -> evaluation -> deployment in an API.
+Run once to generate the artifact:
+    python backend/ml_models.py
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 
-from sklearn.compose import ColumnTransformer
-from sklearn.dummy import DummyRegressor
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 
 from baseline_recommender import BaselineRecommender
 
+# ------------------------------------------------------------------
+# Config
+# ------------------------------------------------------------------
 
-# ----------------------------
-# Paths / constants
-# ----------------------------
+DATA_CSV_PATH = Path(__file__).parent / "data" / "synergy_playtypes_2019_2025_players.csv"
+DEFAULT_OUTPUT_PATH = Path(__file__).parent / "data" / "ml_offense_ppp_predictions.csv"
 
-DATA_DIR = Path(__file__).parent / "data"
-SYNERGY_CSV = DATA_DIR / "synergy_playtypes_2019_2025_players.csv"
-ML_PRED_OUT = DATA_DIR / "ml_offense_ppp_predictions.csv"
+# Feature set for team-level OFFENSE rows.
+FEATURE_COLS = [
+    # Usage / volume
+    "POSS",
+    "POSS_PCT",
+    "RELIABILITY_WEIGHT",
+    # Shot quality & efficiency
+    "FG_PCT",
+    "EFG_PCT",
+    "SCORE_POSS_PCT",
+    "TOV_POSS_PCT",
+    "SF_POSS_PCT",
+    "FT_POSS_PCT",
+    "PLUSONE_POSS_PCT",
+    # League context (stability/anchor of this play type at league level)
+    "REL_LEAGUE",
+]
 
-RANDOM_SEED = 42
+TARGET_COL = "PPP"
+
+# These are aligned with your tuning evidence defaults (ml_stat_analysis.py)
+RIDGE_ALPHA = 0.1
+RF_PARAMS = dict(n_estimators=250, max_depth=None, min_samples_leaf=2)
+GB_PARAMS = dict(learning_rate=0.1, n_estimators=400, max_depth=3)
+
+# ------------------------------------------------------------------
+# Dataset construction (reuses baseline pipeline)
+# ------------------------------------------------------------------
 
 
-# ----------------------------
-# Utility: season sorting
-# ----------------------------
-
-def _season_key(season: str) -> int:
-    """Convert '2019-20' -> 2019 (sortable)."""
-    try:
-        return int(str(season).split("-")[0])
-    except Exception:
-        return 0
-
-
-# ----------------------------
-# Build ML dataset
-# ----------------------------
-
-def load_team_level_table() -> pd.DataFrame:
-    """Load the Synergy snapshot and build the team-level table.
-
-    We reuse BaselineRecommender’s aggregation so the ML dataset matches what the app uses.
+def load_offense_dataset(csv_path: Path = DATA_CSV_PATH) -> pd.DataFrame:
     """
-    if not SYNERGY_CSV.exists():
-        raise FileNotFoundError(
-            f"Missing Synergy CSV at: {SYNERGY_CSV}. "
-            "Make sure backend/data/synergy_playtypes_2019_2025_players.csv exists."
-        )
-    rec = BaselineRecommender(str(SYNERGY_CSV))
-    return rec.team_df.copy()
+    Build a modeling dataset for OFFENSE rows.
 
+    Returns one row per:
+      (SEASON, TEAM_ABBREVIATION, PLAY_TYPE, SIDE='offense')
 
-def build_offense_ml_dataset(min_poss: float = 10.0) -> Tuple[pd.DataFrame, pd.Series]:
-    """Create (X, y) for offense PPP prediction.
+    Each row contains:
+      - team-level offense stats for that play type (features + target)
+      - league-level offense PPP + league reliability for same (season, play_type)
 
-    Target: PPP (team offense PPP by play type)
-    Features (committee-friendly):
-    - categorical: team, play type, season
-    - numeric: usage/possessions + a few efficiency/discipline rates
-
-    We filter to offense rows only and to play types with at least min_poss possessions
-    to reduce extreme noise.
+    We reuse BaselineRecommender so preprocessing is identical to baseline model.
     """
-    df = load_team_level_table()
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Synergy CSV not found: {csv_path}")
 
-    df = df[df["SIDE"] == "offense"].copy()
-    df = df[df["POSS"].fillna(0) >= float(min_poss)].copy()
+    rec = BaselineRecommender(str(csv_path))
+    team_df = rec.team_df
+    league_df = rec.league_df
 
-    # Keep only columns we want.
-    feature_cols = [
-        "SEASON",
-        "TEAM_ABBREVIATION",
-        "PLAY_TYPE",
-        "GP",
-        "POSS",
-        "POSS_PCT",
-        "FG_PCT",
-        "EFG_PCT",
-        "SCORE_POSS_PCT",
-        "TOV_POSS_PCT",
-        "SF_POSS_PCT",
-        "FT_POSS_PCT",
-        "PLUSONE_POSS_PCT",
-    ]
+    off = team_df[team_df["SIDE"] == "offense"].copy()
 
-    # Some columns may not exist in every snapshot; keep what exists.
-    feature_cols = [c for c in feature_cols if c in df.columns]
+    league_off = (
+        league_df[league_df["SIDE"] == "offense"][["SEASON", "PLAY_TYPE", "PPP", "RELIABILITY_WEIGHT"]]
+        .rename(columns={"PPP": "PPP_LEAGUE", "RELIABILITY_WEIGHT": "REL_LEAGUE"})
+        .copy()
+    )
 
-    # Target
-    if "PPP" not in df.columns:
-        raise ValueError("Expected 'PPP' column in team-level table.")
-    y = pd.to_numeric(df["PPP"], errors="coerce")
+    data = off.merge(league_off, on=["SEASON", "PLAY_TYPE"], how="left")
 
-    X = df[feature_cols].copy()
+    cols_needed = FEATURE_COLS + [TARGET_COL, "PPP_LEAGUE", "SEASON", "TEAM_ABBREVIATION", "PLAY_TYPE"]
+    missing = [c for c in cols_needed if c not in data.columns]
+    if missing:
+        raise ValueError(f"Dataset missing required columns: {missing}")
 
-    # Drop rows with missing target
-    mask = y.notna()
-    X = X[mask].reset_index(drop=True)
-    y = y[mask].reset_index(drop=True)
+    data = data.dropna(subset=FEATURE_COLS + [TARGET_COL, "PPP_LEAGUE"]).reset_index(drop=True)
+    return data
 
+
+def get_features_and_target(data: pd.DataFrame, feature_cols: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract X (features) and y (target PPP) from the DataFrame."""
+    X = data[feature_cols].to_numpy(dtype=float)
+    y = data[TARGET_COL].to_numpy(dtype=float)
     return X, y
 
 
-# ----------------------------
-# Model pipelines
-# ----------------------------
-
-def build_baseline_model() -> Pipeline:
-    """A very simple baseline: predict the global mean PPP from training data."""
-    return Pipeline(
-        steps=[
-            ("model", DummyRegressor(strategy="mean")),
-        ]
-    )
+# ------------------------------------------------------------------
+# Season-holdout splitting (train on earlier seasons, test on later)
+# ------------------------------------------------------------------
 
 
-def build_random_forest_model() -> Pipeline:
-    """A stronger (still interpretable) ML model with proper preprocessing."""
-    # Identify categorical vs numeric at runtime in fit() using column names.
-    # We will build the transformer in run_cv_evaluation after we know X columns.
-    # Here we just return a placeholder; we rebuild with correct columns later.
-    raise RuntimeError("Use build_model_pipeline(X) instead.")
-
-
-def build_model_pipeline(X: pd.DataFrame, model_kind: str) -> Pipeline:
-    """Build a full preprocessing + model pipeline for the given model_kind."""
-    # Categorical and numeric columns
-    cat_cols = [c for c in ["SEASON", "TEAM_ABBREVIATION", "PLAY_TYPE"] if c in X.columns]
-    num_cols = [c for c in X.columns if c not in cat_cols]
-
-    pre = ColumnTransformer(
-        transformers=[
-            (
-                "cat",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
-                    ]
-                ),
-                cat_cols,
-            ),
-            (
-                "num",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="median")),
-                        ("scaler", StandardScaler()),
-                    ]
-                ),
-                num_cols,
-            ),
-        ],
-        remainder="drop",
-    )
-
-    if model_kind == "baseline_mean":
-        model = DummyRegressor(strategy="mean")
-
-    elif model_kind == "random_forest":
-        model = RandomForestRegressor(
-            n_estimators=250,
-            random_state=RANDOM_SEED,
-            n_jobs=-1,
-            max_depth=None,
-            min_samples_leaf=2,
-        )
-
-    else:
-        raise ValueError(f"Unknown model_kind: {model_kind}")
-
-    pipe = Pipeline(
-        steps=[
-            ("preprocess", pre),
-            ("model", model),
-        ]
-    )
-
-    return pipe
-
-
-# ----------------------------
-# Evaluation: season holdout CV
-# ----------------------------
-
-def run_cv_evaluation(n_splits: int = 5) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Run season-holdout evaluation and return:
-    - summary_df: indexed by model name, with mean/std RMSE/MAE/R2
-    - fold_metrics: long table (fold, test_season, model, RMSE, MAE, R2)
-
-    Season holdout design:
-    - Sort seasons chronologically
-    - For each fold: train on seasons < test_season, test on that season
-    - Use the last `n_splits` seasons as test folds (as available)
+def make_season_holdout_splits(data: pd.DataFrame, n_splits: int) -> List[Tuple[np.ndarray, np.ndarray, str]]:
     """
-    X, y = build_offense_ml_dataset(min_poss=10.0)
+    Create season-holdout folds (walk-forward).
 
-    seasons = sorted(X["SEASON"].dropna().unique().tolist(), key=_season_key)
-    if len(seasons) < 3:
-        raise ValueError("Not enough seasons to run seasonal holdout evaluation.")
+    train = earlier seasons only
+    test  = a later season
+    """
+    seasons = sorted(data["SEASON"].dropna().unique().tolist())
+    if len(seasons) < 2:
+        raise ValueError("Need at least 2 seasons to run season-holdout evaluation.")
 
-    # Choose test seasons from the end (time-like validation).
-    # We need at least 1 earlier season to train on.
-    max_folds = max(1, len(seasons) - 1)
-    n_splits = int(min(n_splits, max_folds))
+    if n_splits > len(seasons) - 1:
+        raise ValueError(f"n_splits={n_splits} is too large for {len(seasons)} seasons. Use <= {len(seasons)-1}.")
 
-    test_seasons = seasons[-n_splits:]
+    start = len(seasons) - n_splits
+    folds: List[Tuple[np.ndarray, np.ndarray, str]] = []
 
-    model_kinds = ["baseline_mean", "random_forest"]
-    model_names = {"baseline_mean": "BaselineMean", "random_forest": "RandomForest"}
+    for j in range(start, len(seasons)):
+        test_season = seasons[j]
+        train_seasons = seasons[:j]  # strictly earlier seasons only
 
-    records: List[Dict[str, float]] = []
+        train_idx = data.index[data["SEASON"].isin(train_seasons)].to_numpy()
+        test_idx = data.index[data["SEASON"] == test_season].to_numpy()
 
-    for fold_idx, test_season in enumerate(test_seasons, start=1):
-        train_mask = X["SEASON"].apply(_season_key) < _season_key(test_season)
-        test_mask = X["SEASON"] == test_season
-
-        X_train, y_train = X[train_mask], y[train_mask]
-        X_test, y_test = X[test_mask], y[test_mask]
-
-        if len(X_train) < 50 or len(X_test) < 10:
-            # Skip folds that are too small to be meaningful.
+        if train_idx.size == 0 or test_idx.size == 0:
             continue
 
-        for kind in model_kinds:
-            pipe = build_model_pipeline(X_train, kind)
-            pipe.fit(X_train, y_train)
+        folds.append((train_idx, test_idx, test_season))
 
-            pred = pipe.predict(X_test)
+    if not folds:
+        raise ValueError("No valid season-holdout folds could be constructed.")
 
-            rmse = float(np.sqrt(mean_squared_error(y_test, pred)))
-            mae = float(mean_absolute_error(y_test, pred))
-            r2 = float(r2_score(y_test, pred))
+    return folds
 
-            records.append(
-                {
-                    "fold": float(fold_idx),
-                    "test_season": test_season,
-                    "model": model_names[kind],
-                    "RMSE": rmse,
-                    "MAE": mae,
-                    "R2": r2,
-                }
-            )
 
-    fold_metrics = pd.DataFrame.from_records(records)
-    if fold_metrics.empty:
-        raise ValueError("No valid folds produced metrics (dataset too small after filters).")
+# ------------------------------------------------------------------
+# Model builders (aligned with tuning evidence)
+# ------------------------------------------------------------------
 
-    # Summary (mean/std per model)
-    summary = (
-        fold_metrics.groupby("model")[["RMSE", "MAE", "R2"]]
-        .agg(["mean", "std"])
-        .rename(columns={"mean": "mean", "std": "std"})
+
+def _make_ridge() -> Pipeline:
+    # Align with tuning: scaler + ridge(alpha)
+    return Pipeline([("scaler", StandardScaler()), ("model", Ridge(alpha=RIDGE_ALPHA))])
+
+
+def _make_rf(random_state: int) -> RandomForestRegressor:
+    return RandomForestRegressor(
+        n_estimators=RF_PARAMS["n_estimators"],
+        max_depth=RF_PARAMS["max_depth"],
+        min_samples_leaf=RF_PARAMS["min_samples_leaf"],
+        random_state=random_state,
+        n_jobs=-1,
     )
 
-    # Flatten columns
-    summary.columns = [f"{metric}_{stat}" for metric, stat in summary.columns]
-    summary = summary.rename(
-        columns={
-            "RMSE_mean": "RMSE_mean",
-            "RMSE_std": "RMSE_std",
-            "MAE_mean": "MAE_mean",
-            "MAE_std": "MAE_std",
-            "R2_mean": "R2_mean",
-            "R2_std": "R2_std",
-        }
+
+def _make_gb(random_state: int) -> GradientBoostingRegressor:
+    return GradientBoostingRegressor(
+        learning_rate=GB_PARAMS["learning_rate"],
+        n_estimators=GB_PARAMS["n_estimators"],
+        max_depth=GB_PARAMS["max_depth"],
+        random_state=random_state,
     )
 
-    # Ensure required columns exist for app.py
-    for c in ["RMSE_mean", "RMSE_std", "MAE_mean", "MAE_std", "R2_mean", "R2_std"]:
-        if c not in summary.columns:
-            summary[c] = np.nan
 
-    # Index by model name already
-    summary_df = summary
+# ------------------------------------------------------------------
+# Baseline + ML evaluation (defense evidence)
+# ------------------------------------------------------------------
 
+
+def run_cv_evaluation(
+    n_splits: int = 5,
+    random_state: int = 42,
+    csv_path: Path = DATA_CSV_PATH,
+) -> Tuple[pd.DataFrame, Dict[str, Dict[str, List[float]]]]:
+    """
+    Season-holdout evaluation comparing:
+      - Baseline (league mean)
+      - Ridge (scaled)
+      - RandomForest
+      - GradientBoosting
+
+    NOTE (why tuning RMSE != holdout RMSE):
+      - Tuning RMSE is cross-validation during search
+      - Holdout RMSE is strict "future season" generalization
+      - Holdout is the number we defend as final generalization evidence
+    """
+    data = load_offense_dataset(csv_path)
+
+    # Use all feature cols for holdout (same set your holdout endpoint expects)
+    feature_cols = list(FEATURE_COLS)
+
+    X, y = get_features_and_target(data, feature_cols)
+    folds = make_season_holdout_splits(data, n_splits=n_splits)
+
+    model_builders: Dict[str, Callable[[], object] | None] = {
+        "Baseline (league mean)": None,
+        "Ridge": _make_ridge,
+        "RandomForest": lambda: _make_rf(random_state),
+        "GradientBoosting": lambda: _make_gb(random_state),
+    }
+
+    fold_metrics: Dict[str, Dict[str, List[float]]] = {
+        name: {"RMSE": [], "MAE": [], "R2": []} for name in model_builders.keys()
+    }
+
+    baseline_pred_all = data["PPP_LEAGUE"].to_numpy(dtype=float)
+
+    for train_idx, test_idx, _test_season in folds:
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+
+        # ---- Baseline ----
+        y_pred_baseline = baseline_pred_all[test_idx]
+        fold_metrics["Baseline (league mean)"]["RMSE"].append(float(np.sqrt(mean_squared_error(y_test, y_pred_baseline))))
+        fold_metrics["Baseline (league mean)"]["MAE"].append(float(mean_absolute_error(y_test, y_pred_baseline)))
+        fold_metrics["Baseline (league mean)"]["R2"].append(float(r2_score(y_test, y_pred_baseline)))
+
+        # ---- ML models ----
+        for name, builder in model_builders.items():
+            if builder is None:
+                continue
+            model = builder()
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+
+            fold_metrics[name]["RMSE"].append(float(np.sqrt(mean_squared_error(y_test, y_pred))))
+            fold_metrics[name]["MAE"].append(float(mean_absolute_error(y_test, y_pred)))
+            fold_metrics[name]["R2"].append(float(r2_score(y_test, y_pred)))
+
+    # Summarize
+    rows = []
+    for name, metrics in fold_metrics.items():
+        row = {"model": name}
+        for metric_name, values in metrics.items():
+            arr = np.asarray(values, dtype=float)
+            row[f"{metric_name}_mean"] = float(arr.mean())
+            row[f"{metric_name}_std"] = float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
+        rows.append(row)
+
+    summary_df = pd.DataFrame(rows).set_index("model").sort_values("RMSE_mean", ascending=True)
     return summary_df, fold_metrics
 
 
-def paired_t_test_rmse(fold_metrics: pd.DataFrame) -> Tuple[float, float]:
-    """Paired t-test comparing RMSE across folds: RandomForest vs BaselineMean.
-
-    Returns (t_stat, p_value). If SciPy isn't available or not enough folds,
-    returns (nan, nan).
+def pick_best_holdout_model_name(summary_df: pd.DataFrame) -> str:
     """
+    Pick best ML model by lowest holdout RMSE_mean.
+    Excludes the baseline from selection.
+    """
+    idx = [m for m in summary_df.index.tolist() if m != "Baseline (league mean)"]
+    if not idx:
+        return "RandomForest"
+    sub = summary_df.loc[idx]
+    return str(sub.sort_values("RMSE_mean", ascending=True).index[0])
+
+
+# ------------------------------------------------------------------
+# Optional significance testing helper
+# ------------------------------------------------------------------
+
+
+def paired_t_test_rmse(
+    fold_metrics: Dict[str, Dict[str, List[float]]],
+    baseline_name: str = "Baseline (league mean)",
+    model_name: str = "RandomForest",
+) -> Tuple[float | None, float | None]:
+    """
+    Paired t-test on fold RMSE values: baseline vs model.
+
+    Returns:
+      (t_stat, p_value) if SciPy exists
+      else (t_stat_manual, None)
+
+    NOTE:
+    - Your frontend currently labels this as RandomForest vs baseline.
+    - Keep default model_name="RandomForest" so existing UI text doesn't break.
+    - For defense, you can ALSO compute the best-model t-test in __main__.
+    """
+    base = np.asarray(fold_metrics[baseline_name]["RMSE"], dtype=float)
+    mod = np.asarray(fold_metrics[model_name]["RMSE"], dtype=float)
+
+    if base.size < 2 or mod.size < 2:
+        return None, None
+
+    diffs = base - mod
+    mean_diff = float(diffs.mean())
+    std_diff = float(diffs.std(ddof=1)) if diffs.size > 1 else 0.0
+    t_manual = mean_diff / (std_diff / np.sqrt(diffs.size)) if std_diff > 0 else None
+
     try:
-        from scipy.stats import ttest_rel  # type: ignore
+        from scipy import stats
+        t_stat, p_val = stats.ttest_rel(base, mod)
+        return float(t_stat), float(p_val)
     except Exception:
-        return float("nan"), float("nan")
-
-    if fold_metrics is None or fold_metrics.empty:
-        return float("nan"), float("nan")
-
-    # Pivot so each fold has both models
-    pivot = fold_metrics.pivot_table(index="test_season", columns="model", values="RMSE", aggfunc="mean")
-
-    if "RandomForest" not in pivot.columns or "BaselineMean" not in pivot.columns:
-        return float("nan"), float("nan")
-
-    rf = pivot["RandomForest"].dropna()
-    bl = pivot["BaselineMean"].dropna()
-
-    common = rf.index.intersection(bl.index)
-    if len(common) < 2:
-        return float("nan"), float("nan")
-
-    t_stat, p_val = ttest_rel(rf.loc[common], bl.loc[common])
-    return float(t_stat), float(p_val)
+        return (float(t_manual) if t_manual is not None else None), None
 
 
-# ----------------------------
-# Export predictions for the API
-# ----------------------------
+# ------------------------------------------------------------------
+# Save predictions for the recommender (used by Context Simulator)
+# ------------------------------------------------------------------
 
-def train_full_and_export_predictions(output_path: Path = ML_PRED_OUT) -> Path:
-    """Train the chosen model on ALL offense rows and export predictions.
 
-    Output columns:
-      SEASON, TEAM_ABBREVIATION, PLAY_TYPE, PPP_ML
-
-    Note:
-    - This is a deployment artifact for the app demo.
-    - For strict leakage-free prediction you'd generate out-of-fold predictions per season,
-      but for capstone scope this is sufficient and explainable (and we still provide
-      season-holdout evaluation above).
+def train_and_save_predictions_walk_forward(
+    *,
+    csv_path: Path = DATA_CSV_PATH,
+    output_path: Path = DEFAULT_OUTPUT_PATH,
+    random_state: int = 42,
+    model_name: str = "auto",
+    n_splits_for_auto: int = 5,
+) -> str:
     """
-    X, y = build_offense_ml_dataset(min_poss=10.0)
+    Generate PPP_ML predictions per (season, team, play_type) using a walk-forward approach:
 
-    pipe = build_model_pipeline(X, model_kind="random_forest")
-    pipe.fit(X, y)
+      - For each season in chronological order:
+           train on all earlier seasons
+           predict for the current season
+      - For the first season (no earlier training data), fallback to PPP_LEAGUE.
 
-    pred = pipe.predict(X)
+    model_name:
+      - "auto" => pick BEST holdout model (lowest RMSE_mean) and use that for the artifact
+      - or "Ridge" / "RandomForest" / "GradientBoosting"
 
-    out = pd.DataFrame(
-        {
-            "SEASON": X["SEASON"].astype(str),
-            "TEAM_ABBREVIATION": X["TEAM_ABBREVIATION"].astype(str),
-            "PLAY_TYPE": X["PLAY_TYPE"].astype(str),
-            "PPP_ML": pred.astype(float),
-        }
-    )
+    Output CSV columns:
+        SEASON, TEAM_ABBREVIATION, PLAY_TYPE, PPP_ML
+    """
+    data = load_offense_dataset(csv_path)
+    seasons = sorted(data["SEASON"].unique().tolist())
+    if len(seasons) < 2:
+        raise ValueError("Need at least 2 seasons to generate walk-forward predictions.")
 
-    # If duplicates exist, average them (should be rare).
-    out = (
-        out.groupby(["SEASON", "TEAM_ABBREVIATION", "PLAY_TYPE"], as_index=False)["PPP_ML"]
-        .mean()
-        .sort_values(["SEASON", "TEAM_ABBREVIATION", "PLAY_TYPE"])
-        .reset_index(drop=True)
-    )
+    feature_cols = list(FEATURE_COLS)
+    X, y = get_features_and_target(data, feature_cols)
+
+    chosen = model_name
+    if model_name.lower() == "auto":
+        summary, _ = run_cv_evaluation(n_splits=n_splits_for_auto, random_state=random_state, csv_path=csv_path)
+        chosen = pick_best_holdout_model_name(summary)
+
+    def build_model(name: str):
+        if name == "Ridge":
+            return _make_ridge()
+        if name == "GradientBoosting":
+            return _make_gb(random_state)
+        # default
+        return _make_rf(random_state)
+
+    y_hat = np.full(shape=y.shape, fill_value=np.nan, dtype=float)
+
+    # First season fallback
+    first = seasons[0]
+    first_idx = data.index[data["SEASON"] == first].to_numpy()
+    y_hat[first_idx] = data.loc[first_idx, "PPP_LEAGUE"].to_numpy(dtype=float)
+
+    model = build_model(chosen)
+
+    for s in seasons[1:]:
+        train_idx = data.index[data["SEASON"].isin([x for x in seasons if x < s])].to_numpy()
+        test_idx = data.index[data["SEASON"] == s].to_numpy()
+
+        if train_idx.size == 0 or test_idx.size == 0:
+            continue
+
+        model = build_model(chosen)  # re-init each season
+        model.fit(X[train_idx], y[train_idx])
+        y_hat[test_idx] = model.predict(X[test_idx])
+
+    nan_mask = np.isnan(y_hat)
+    if nan_mask.any():
+        y_hat[nan_mask] = data.loc[nan_mask, "PPP_LEAGUE"].to_numpy(dtype=float)
+
+    out = data[["SEASON", "TEAM_ABBREVIATION", "PLAY_TYPE"]].copy()
+    out["PPP_ML"] = y_hat
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(output_path, index=False)
-    return output_path
 
+    print(f"Saved walk-forward ML offense PPP predictions to: {output_path}")
+    print(f"Artifact model used: {chosen}")
+    return chosen
+
+
+# ------------------------------------------------------------------
+# CLI entry point
+# ------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # 1) Run evaluation (prints to console for quick checking)
-    summary_df, fold_df = run_cv_evaluation(n_splits=5)
-    print("\n=== Model Evaluation (Season Holdout) ===")
-    print(summary_df)
+    print("Running season-holdout evaluation (offense PPP prediction)...")
+    summary, fold_metrics = run_cv_evaluation(n_splits=5, random_state=42)
 
-    t, p = paired_t_test_rmse(fold_df)
-    print(f"\nPaired t-test (RMSE): t={t:.3f} p={p:.4f}")
+    print("\n=== Model comparison (season-holdout) ===")
+    print(summary)
 
-    # 2) Export predictions used by the Context+ML recommender
-    out_path = train_full_and_export_predictions()
-    print(f"\nSaved ML predictions to: {out_path}")
+    best_model = pick_best_holdout_model_name(summary)
+    print(f"\nBest ML by holdout RMSE: {best_model}")
+
+    # Keep legacy t-test for the frontend wording (RF vs baseline)
+    t_stat, p_val = paired_t_test_rmse(fold_metrics, model_name="RandomForest")
+    print("\nPaired t-test on fold RMSE (Baseline vs RandomForest):")
+    print(f"t-statistic = {t_stat:.3f}" if t_stat is not None else "t-statistic = — (not enough folds)")
+    print(f"p-value     = {p_val:.5f}" if p_val is not None else "p-value     = — (SciPy not installed or unavailable)")
+
+    # Extra defense-friendly t-test: Baseline vs BEST model
+    t2, p2 = paired_t_test_rmse(fold_metrics, model_name=best_model)
+    print(f"\nPaired t-test on fold RMSE (Baseline vs {best_model}):")
+    print(f"t-statistic = {t2:.3f}" if t2 is not None else "t-statistic = — (not enough folds)")
+    print(f"p-value     = {p2:.5f}" if p2 is not None else "p-value     = — (SciPy not installed or unavailable)")
+
+    # Generate the artifact used by the Context Simulator (AI page)
+    # IMPORTANT: now uses best model automatically (consistency with performance page)
+    train_and_save_predictions_walk_forward(model_name="auto")

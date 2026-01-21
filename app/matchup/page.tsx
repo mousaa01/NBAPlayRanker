@@ -1,269 +1,625 @@
-// app/matchup-console/page.tsx
+// app/matchup/page.tsx
 //
-// This file implements the **Matchup Console (Baseline)** screen.
+// Baseline Matchup Console (Explainable recommender)
 //
-// Purpose:
-// - Show a clean, worked example of our **baseline recommendation engine**
-//   for a single matchup.
-// - Use a fixed Season + Our team + Opponent so we can talk through the logic
-//   without changing inputs during the demo.
-// - Display the full Top-K ranking returned by the baseline API, including:
-//     * predicted PPP for each play type,
-//     * our team’s PPP on that play type,
-//     * the opponent’s allowed PPP on that play type,
-//     * and the gap vs the opponent’s typical allowed PPP.
-// - Make the exact API call visible so the frontend–backend contract is clear.
+// Updated to be defense-ready” and consistent with your other pages:
+// - Adds a clear “What happens in the backend” section (architecture/module clarity)
+// - Adds guardrails for weights (auto-normalize + warning if they don't sum to 1)
+// - Improves default-setting logic (prevents early auto-run before meta is ready)
+// - Adds KPI summary cards (season/teams/weights) like your Model Metrics/Stat Analysis vibe
+// - Keeps: Top-K ranking, rationale, show-math toggle, CSV export, bars + table
 //
-// This page is intentionally focused on a single example matchup.
-// If the user wants to change matchups, they do that on the **Data Explorer**
-// page, which is dedicated to exploring and exporting inputs.
+// Assumptions about backend payload (unchanged from your current page):
+// - baselineRank(...) returns BaselineRow[]
+// - BaselineRow has playType, pppPred, pppOff, pppDef, pppGap, rationale, raw
+// - raw contains optional POSS_OFF, POSS_PCT_OFF, RELIABILITY_WEIGHT_OFF/DEF, PPP_LEAGUE_OFF/DEF
 
-// Mark this as a client component because we use React hooks.
-'use client';
+"use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  baselineRank,
+  fetchBaselineInfo,
+  fetchMetaOptions,
+  getBaselineCsvUrl,
+} from "../utils";
 
-// Shared utilities:
-// - API_BASE: base URL for our FastAPI backend.
-// - SEASONS: list of seasons from the Synergy snapshot.
-// - baselineRank: helper that calls `/rank-plays/baseline` with query params
-//   and returns parsed JSON.
-//
-// We import these from a central utils module so the page stays focused on UI
-// and presentation logic.
-import { API_BASE, SEASONS, baselineRank } from "../utils";
+type MetaOptions = {
+  seasons: string[];
+  teams: string[];
+  teamNames?: Record<string, string>;
+  playTypes?: string[];
+  sides?: string[];
+  hasMlPredictions?: boolean;
+  _fallback?: boolean;
+};
 
-// Shape of each ranked play returned by the baseline API.
-//
-// The backend computes these fields from team-level tables and league averages:
-// - playType: label like "Spotup", "PRRollMan", etc.
-// - PPP_pred: predicted PPP for this play type in the selected matchup.
-// - PPP_off: our team's historical PPP for that play type (after shrinkage).
-// - PPP_def: opponent's historical PPP allowed on that play type (after shrinkage).
-// - PPP_gap: PPP_pred − PPP_def (how much better/worse than their norm).
-//
-// Modelling these explicitly gives us type-safety and makes it clear what the
-// baseline model is actually producing.
-type RankedPlay = {
+type BaselineInfo = {
+  formula?: string;
+  defaults?: { w_off?: number; w_def?: number };
+  definitions?: Record<string, string>;
+  whyShrinkage?: string;
+};
+
+type BaselineRow = {
   playType: string;
-  PPP_pred: number;
-  PPP_off: number;
-  PPP_def: number;
-  PPP_gap: number;
+  pppPred: number;
+  pppOff: number;
+  pppDef: number;
+  pppGap: number;
+  rationale: string;
+  raw: Record<string, any>;
 };
 
-// A single, fixed example request used on this screen.
-//
-// Rationale:
-// - We want a **stable example** for the defence, so the numbers don't change
-//   mid-presentation.
-// - Using a constant object also makes it easy to show the exact API call
-//   at the bottom of the page.
-//
-// Season: we use the first entry in SEASONS (e.g., "2019-20").
-// Teams: Toronto (offense) vs Boston (defense).
-// k: we request the Top-10 play types from the baseline model.
-const EXAMPLE_REQUEST = {
-  season: SEASONS[0], // e.g., "2019-20"
-  our: "TOR",
-  opp: "BOS",
-  k: 10,
-};
+function fmt(n: any, digits = 3) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return x.toFixed(digits);
+}
 
-// Main React component for the Matchup Console page.
-export default function MatchupConsolePage() {
-  // --------------------------
-  // 1. State: data + UI flags
-  // --------------------------
+function fmtInt(n: any) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return String(Math.round(x));
+}
 
-  // rows: array of RankedPlay objects returned by the baseline API.
-  const [rows, setRows] = useState<RankedPlay[]>([]);
+function clamp01(x: number) {
+  return Math.max(0, Math.min(1, x));
+}
 
-  // loading: true while we're waiting for the backend to respond.
+function pickDefaultSeason(seasons: string[]) {
+  return seasons.length ? seasons[seasons.length - 1] : "";
+}
+
+function pickDefaultOur(teams: string[]) {
+  if (teams.includes("TOR")) return "TOR";
+  return teams[0] ?? "";
+}
+
+function pickDefaultOpp(teams: string[], our: string) {
+  const preferred = ["BOS", "LAL", "DEN", "MIA", "GSW"];
+  for (const t of preferred) {
+    if (teams.includes(t) && t !== our) return t;
+  }
+  return teams.find((t) => t !== our) ?? "";
+}
+
+function safePct(x: any) {
+  const v = Number(x);
+  if (!Number.isFinite(v)) return "—";
+  return `${(v * 100).toFixed(1)}%`;
+}
+
+// Normalize weights so they always sum to 1 (defense-friendly + avoids weird results)
+function normalizeWeights(wOff: number, wDef: number) {
+  const a = Number(wOff);
+  const b = Number(wDef);
+  const sum = a + b;
+  if (!Number.isFinite(sum) || sum <= 0) return { wOff: 0.7, wDef: 0.3 };
+  return { wOff: a / sum, wDef: b / sum };
+}
+
+export default function MatchupPage() {
+  const [meta, setMeta] = useState<MetaOptions>({
+    seasons: [],
+    teams: [],
+    teamNames: {},
+    playTypes: [],
+    sides: ["offense", "defense"],
+    hasMlPredictions: false,
+  });
+
+  const [baselineInfo, setBaselineInfo] = useState<BaselineInfo | null>(null);
+
+  // Form state
+  const [season, setSeason] = useState("");
+  const [our, setOur] = useState("");
+  const [opp, setOpp] = useState("");
+  const [k, setK] = useState(5);
+
+  // Weights (normalized on-run)
+  const [wOff, setWOff] = useState(0.7);
+  const [wDef, setWDef] = useState(0.3);
+
+  // Results state
+  const [rows, setRows] = useState<BaselineRow[]>([]);
   const [loading, setLoading] = useState(false);
-
-  // error: holds any error message from the fetch, or null if none.
   const [error, setError] = useState<string | null>(null);
 
-  // -------------------------------------------------------
-  // 2. Effect: call the baseline endpoint once on mount
-  // -------------------------------------------------------
-  //
-  // When the component first mounts, we:
-  //   1. mark loading=true,
-  //   2. call baselineRank(EXAMPLE_REQUEST),
-  //   3. store the resulting rows,
-  //   4. handle any errors,
-  //   5. mark loading=false.
-  //
-  // We don't re-run this effect because the dependency array is []:
-  // this page is designed around a **single example matchup**.
+  const [showMath, setShowMath] = useState(false);
 
+  // Prevent repeated auto-run
+  const didAutoRunRef = useRef(false);
+
+  // Load meta + baseline formula info
   useEffect(() => {
     let cancelled = false;
 
-    async function run() {
+    async function init() {
       try {
-        setLoading(true);
         setError(null);
 
-        // Call the shared helper which issues a GET request to:
-        //   /rank-plays/baseline?season=...&our=...&opp=...&k=...
-        // and returns parsed JSON.
-        const result = await baselineRank(EXAMPLE_REQUEST);
+        const m = await fetchMetaOptions();
+        if (cancelled) return;
+        setMeta(m);
 
-        if (!cancelled) {
-          // The backend should return an array of objects. We narrow to RankedPlay[].
-          setRows(Array.isArray(result) ? (result as RankedPlay[]) : []);
-        }
-      } catch (err: any) {
-        console.error(err);
-        if (!cancelled) {
-          // Capture a friendly error message and clear any stale rows.
-          setError(err?.message ?? "Unable to load baseline ranking.");
-          setRows([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        const defaultSeason = pickDefaultSeason(m.seasons ?? []);
+        const defaultOur = pickDefaultOur(m.teams ?? []);
+        const defaultOpp = pickDefaultOpp(m.teams ?? [], defaultOur);
+
+        setSeason((prev) => prev || defaultSeason);
+        setOur((prev) => prev || defaultOur);
+        setOpp((prev) => prev || defaultOpp);
+
+        const b = await fetchBaselineInfo();
+        if (cancelled) return;
+        setBaselineInfo(b);
+
+        // Apply backend defaults if present
+        if (b?.defaults?.w_off != null) setWOff(Number(b.defaults.w_off));
+        if (b?.defaults?.w_def != null) setWDef(Number(b.defaults.w_def));
+      } catch (e: any) {
+        console.error(e);
+        if (!cancelled) setError(e?.message ?? "Failed to load metadata.");
       }
     }
 
-    run();
-
-    // Cleanup: if the component unmounts before the request finishes,
-    // mark it as cancelled so we don't try to set state on an unmounted component.
+    init();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Convenience: the top-ranked play, if present.
-  const top = rows[0];
+  const weightsSum = useMemo(() => Number(wOff) + Number(wDef), [wOff, wDef]);
+  const weightsWarn = useMemo(() => {
+    if (!Number.isFinite(weightsSum)) return true;
+    return Math.abs(weightsSum - 1) > 0.01; // warn if not close to 1
+  }, [weightsSum]);
 
-  // -------------------------------------------------------
-  // 3. Render: JSX for the Matchup Console page
-  // -------------------------------------------------------
+  // CSV download URL for current selections
+  const csvUrl = useMemo(() => {
+    if (!season || !our || !opp) return "#";
+    const norm = normalizeWeights(wOff, wDef);
+    return getBaselineCsvUrl({ season, our, opp, k, wOff: norm.wOff, wDef: norm.wDef });
+  }, [season, our, opp, k, wOff, wDef]);
+
+  // Helpful team label (abbr + name)
+  const ourLabel = useMemo(() => {
+    const name = meta.teamNames?.[our];
+    return name ? `${our} (${name})` : our;
+  }, [meta.teamNames, our]);
+
+  const oppLabel = useMemo(() => {
+    const name = meta.teamNames?.[opp];
+    return name ? `${opp} (${name})` : opp;
+  }, [meta.teamNames, opp]);
+
+  const runContextHref = useMemo(() => {
+    const qs = new URLSearchParams({
+      season,
+      our,
+      opp,
+      k: String(k),
+    });
+    return `/context?${qs.toString()}`;
+  }, [season, our, opp, k]);
+
+  async function runBaseline() {
+    if (!season || !our || !opp) {
+      setError("Please select a season, our team, and an opponent.");
+      return;
+    }
+    if (our === opp) {
+      setError("Our team and opponent must be different.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+      setRows([]);
+
+      const norm = normalizeWeights(wOff, wDef);
+
+      const out = await baselineRank({
+        season,
+        our,
+        opp,
+        k,
+        wOff: norm.wOff,
+        wDef: norm.wDef,
+      });
+
+      setRows(Array.isArray(out) ? out : []);
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message ?? "Failed to generate baseline recommendations.");
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Auto-run once defaults are ready (only once)
+  useEffect(() => {
+    const metaReady = (meta?.seasons?.length ?? 0) > 0 && (meta?.teams?.length ?? 0) > 0;
+    if (!metaReady) return;
+    if (!season || !our || !opp) return;
+    if (didAutoRunRef.current) return;
+    if (loading) return;
+
+    didAutoRunRef.current = true;
+    runBaseline();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta.seasons, meta.teams, season, our, opp]);
+
+  // Simple “best” row (top-ranked already, but we compute just in case)
+  const bestRow = useMemo(() => {
+    if (!rows.length) return null;
+    const valid = rows.filter((r) => Number.isFinite(Number(r.pppPred)));
+    if (!valid.length) return null;
+    return valid[0];
+  }, [rows]);
 
   return (
     <section className="card">
-      {/* Title and short description of the use-case. */}
       <h1 className="h1">Matchup Console (Baseline)</h1>
+
       <p className="muted">
-        This page shows a worked example of our baseline recommendation engine for a
-        single matchup. The example uses a fixed season and team vs opponent. If you want
-        to change the matchup, you do that on the <strong>Data Explorer</strong> page and
-        use the CSV output there.
+        This page uses a <strong>transparent baseline formula</strong> to rank play types for a matchup.
+        It is intentionally explainable so the reasoning can be defended.
       </p>
 
-      {/* ------------------------------ */}
-      {/* High-level explanation of logic */}
-      {/* ------------------------------ */}
-      <div
-        className="card"
-        style={{ marginTop: 8, marginBottom: 16, padding: 12 }}
-      >
-        <h2 className="h3">What the baseline is doing</h2>
-        <ul className="muted" style={{ fontSize: 13, paddingLeft: 20 }}>
-          <li>
-            Take our team’s historical PPP by play type from the Synergy snapshot.
-          </li>
-          <li>
-            Take the opponent’s historical PPP allowed by play type from the same data.
-          </li>
-          <li>
-            Combine them into a predicted PPP for each play type (shrinkage toward
-            league averages to avoid overfitting small samples).
-          </li>
-          <li>Sort play types from highest to lowest predicted PPP and keep Top-K.</li>
+      {/* ✅ Backend / architecture clarity */}
+      <div style={{ marginTop: 12 }} className="kpi">
+        <div className="label">
+          <strong style={{ color: "rgba(15,23,42,0.9)" }}>What happens when you click “Run Baseline”?</strong>
+        </div>
+        <ul className="muted" style={{ fontSize: 13, paddingLeft: 18, marginTop: 10 }}>
+          <li>Frontend (this page) sends: season, our team, opponent, k, weights.</li>
+          <li>Backend computes shrunk offense PPP for our team by play type.</li>
+          <li>Backend computes shrunk defense-allowed PPP for opponent by play type.</li>
+          <li>Baseline prediction uses the weighted formula and sorts descending.</li>
+          <li>Response returns Top-K rows + rationale + raw math fields (for transparency).</li>
         </ul>
       </div>
 
-      {/* ------------------------------ */}
-      {/* Loading / error / empty states */}
-      {/* ------------------------------ */}
-
-      {loading && (
-        <p className="muted" style={{ marginTop: 16 }}>
-          Loading baseline ranking…
+      {/* Baseline formula panel */}
+      <div style={{ marginTop: 12 }}>
+        <h2 style={{ margin: "8px 0 6px", fontSize: 16 }}>Baseline formula</h2>
+        <p className="muted" style={{ fontSize: 13 }}>
+          <code>
+            {baselineInfo?.formula ??
+              "PPP_PRED = w_off * PPP_OFF_SHRUNK + w_def * PPP_DEF_SHRUNK"}
+          </code>
         </p>
-      )}
 
-      {error && !loading && (
-        <p className="muted" style={{ marginTop: 16 }}>
+        {baselineInfo?.whyShrinkage ? (
+          <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+            <strong>Why shrinkage?</strong> {baselineInfo.whyShrinkage}
+          </p>
+        ) : null}
+
+        {baselineInfo?.definitions ? (
+          <details style={{ marginTop: 10 }}>
+            <summary style={{ cursor: "pointer", fontSize: 13 }}>Show definitions</summary>
+            <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+              {Object.entries(baselineInfo.definitions).map(([k, v]) => (
+                <div key={k} className="muted" style={{ fontSize: 13 }}>
+                  <span style={{ fontFamily: "var(--mono)" }}>{k}</span>: {v}
+                </div>
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </div>
+
+      {/* Controls */}
+      <form className="form-grid" onSubmit={(e) => e.preventDefault()} style={{ marginTop: 10 }}>
+        <label>
+          Season
+          <select className="input" value={season} onChange={(e) => setSeason(e.target.value)}>
+            {(meta.seasons ?? []).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Our Team
+          <select className="input" value={our} onChange={(e) => setOur(e.target.value)}>
+            {(meta.teams ?? []).map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Opponent
+          <select className="input" value={opp} onChange={(e) => setOpp(e.target.value)}>
+            {(meta.teams ?? []).map((t) => (
+              <option key={t} value={t} disabled={t === our}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Top-K
+          <select className="input" value={k} onChange={(e) => setK(Number(e.target.value))}>
+            {[3, 5, 7, 10].map((x) => (
+              <option key={x} value={x}>
+                {x}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Offense weight (w_off)
+          <input
+            className="input"
+            type="number"
+            step="0.05"
+            min={0}
+            max={1}
+            value={wOff}
+            onChange={(e) => setWOff(Number(e.target.value))}
+          />
+        </label>
+
+        <label>
+          Defense weight (w_def)
+          <input
+            className="input"
+            type="number"
+            step="0.05"
+            min={0}
+            max={1}
+            value={wDef}
+            onChange={(e) => setWDef(Number(e.target.value))}
+          />
+        </label>
+      </form>
+
+      {/* ✅ Weight warning (committee will like this) */}
+      {weightsWarn ? (
+        <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+          Note: weights currently sum to <strong>{fmt(weightsSum, 2)}</strong>. We normalize them internally so
+          the formula remains consistent (w_off + w_def = 1).
+        </p>
+      ) : null}
+
+      {/* Actions */}
+      <div
+        style={{
+          marginTop: 14,
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button className="btn" type="button" onClick={runBaseline} disabled={loading}>
+            {loading ? "Running…" : "Run Baseline"}
+          </button>
+
+          <a
+            className="btn"
+            href={csvUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-disabled={!season || !our || !opp}
+          >
+            Export CSV
+          </a>
+
+          <button className="btn" type="button" onClick={() => setShowMath((v) => !v)}>
+            {showMath ? "Hide math fields" : "Show math fields"}
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Link className="btn" href="/data-explorer">
+            Back: Data Explorer
+          </Link>
+
+          <Link className="btn" href={runContextHref}>
+            Next: AI Context
+          </Link>
+        </div>
+      </div>
+
+      {/* Errors */}
+      {error ? (
+        <p className="muted" style={{ marginTop: 12 }}>
           {error}
         </p>
-      )}
+      ) : null}
 
-      {!loading && !error && rows.length === 0 && (
-        <p className="muted" style={{ marginTop: 16 }}>
-          No recommendations returned for this example matchup yet.
-        </p>
-      )}
+      {/* ✅ KPI strip (same vibe as your other pages) */}
+      {!loading && season && our && opp ? (
+        <div className="grid" style={{ marginTop: 14 }}>
+          <div className="kpi">
+            <div className="label">Matchup</div>
+            <div className="value" style={{ fontSize: 16, fontWeight: 800 }}>
+              {our} vs {opp}
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              {ourLabel} vs {oppLabel}
+            </div>
+          </div>
 
-      {/* ------------------------------------------------- */}
-      {/* Optional small summary for the top recommended play */}
-      {/* ------------------------------------------------- */}
-      {!loading && !error && top && (
-        <p className="muted" style={{ marginTop: 16 }}>
-          For this example matchup, the top recommended play type is{" "}
-          <b>{top.playType}</b> with predicted PPP <b>{top.PPP_pred.toFixed(3)}</b>. That
-          is{" "}
-          {(top.PPP_gap >= 0 ? "+" : "") + top.PPP_gap.toFixed(3)} PPP better than what
-          the opponent usually allows on that play.
-        </p>
-      )}
+          <div className="kpi">
+            <div className="label">Season / Top-K</div>
+            <div className="value">
+              {season} / {k}
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              Ranking is computed from matchup-specific play-type data.
+            </div>
+          </div>
 
-      {/* ------------------------------ */}
-      {/* Main Top-K ranking table        */}
-      {/* ------------------------------ */}
-      {!loading && !error && rows.length > 0 && (
-        <div className="table-scroll" style={{ marginTop: 8 }}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Play type</th>
-                <th>Predicted PPP</th>
-                <th>Our PPP</th>
-                <th>Opponent allowed PPP</th>
-                <th>Gap vs allowed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, idx) => (
-                // We add a CSS class "top1" to the first row so it can be
-                // highlighted via styling, making the primary recommendation
-                // immediately visible to the coach.
-                <tr key={r.playType} className={idx === 0 ? "top1" : ""}>
-                  <td>{idx + 1}</td>
-                  <td>{r.playType}</td>
-                  <td>{r.PPP_pred.toFixed(3)}</td>
-                  <td>{r.PPP_off.toFixed(3)}</td>
-                  <td>{r.PPP_def.toFixed(3)}</td>
-                  <td>{(r.PPP_gap >= 0 ? "+" : "") + r.PPP_gap.toFixed(3)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="kpi">
+            <div className="label">Weights used</div>
+            <div className="value" style={{ fontFamily: "var(--mono)" }}>
+              off={fmt(normalizeWeights(wOff, wDef).wOff, 2)} / def={fmt(normalizeWeights(wOff, wDef).wDef, 2)}
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              Normalized to keep the baseline formula consistent.
+            </div>
+          </div>
         </div>
-      )}
+      ) : null}
 
-      {/* ------------------------------ */}
-      {/* API call trace for defence      */}
-      {/* ------------------------------ */}
-      {/* For explanation and debugging, we show the exact baseline endpoint
-          and query parameters used for this example. This makes the flow
-          from frontend → backend → model completely transparent. */}
-      <p className="muted" style={{ marginTop: 16, fontSize: 11 }}>
-        API call:&nbsp;
-        <code>
-          {API_BASE}/rank-plays/baseline?season={EXAMPLE_REQUEST.season}&amp;our=
-          {EXAMPLE_REQUEST.our}
-          &amp;opp={EXAMPLE_REQUEST.opp}&amp;k={EXAMPLE_REQUEST.k}
-        </code>
-      </p>
+      {/* Results */}
+      {rows.length > 0 && !loading ? (
+        <div style={{ marginTop: 14 }}>
+          <p className="muted" style={{ fontSize: 13 }}>
+            <strong>{ourLabel}</strong> vs <strong>{oppLabel}</strong> ({season}) — showing Top {k}
+          </p>
+
+          {/* Best recommendation highlight */}
+          {bestRow ? (
+            <div className="kpi" style={{ marginTop: 10 }}>
+              <div className="label">Top recommendation</div>
+              <div className="value" style={{ fontSize: 16, fontWeight: 800 }}>
+                {bestRow.playType} (Pred PPP {fmt(bestRow.pppPred, 3)})
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                Rationale: {bestRow.rationale}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Bars */}
+          <div style={{ marginTop: 12 }}>
+            <h2 style={{ margin: "8px 0 6px", fontSize: 16 }}>Top recommendations (PPP bars)</h2>
+            <div style={{ display: "grid", gap: 8 }}>
+              {rows.map((r) => {
+                // keep your original scaling: ~1.4 max PPP
+                const width = clamp01(Number(r.pppPred) / 1.4) * 100;
+
+                return (
+                  <div
+                    key={r.playType}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "220px 1fr 80px",
+                      gap: 10,
+                      alignItems: "center",
+                    }}
+                  >
+                    <div style={{ fontSize: 13 }}>
+                      <strong>{r.playType}</strong>
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        gap {fmt(r.pppGap, 3)}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        height: 10,
+                        borderRadius: 999,
+                        background: "rgba(15,23,42,0.08)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${width}%`,
+                          height: "100%",
+                          background: "rgba(15, 23, 42, 0.35)",
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 12 }}>
+                      {fmt(r.pppPred, 3)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Table */}
+          <div style={{ marginTop: 14, overflowX: "auto" }}>
+            <h2 style={{ margin: "8px 0 6px", fontSize: 16 }}>Ranking table (explainable fields)</h2>
+
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Play Type</th>
+                  <th>Pred PPP</th>
+                  <th>Our PPP (shrunk)</th>
+                  <th>Opp Allowed (shrunk)</th>
+                  <th>Gap</th>
+
+                  {showMath ? (
+                    <>
+                      <th>Poss (our)</th>
+                      <th>Poss% (our)</th>
+                      <th>Rel (our)</th>
+                      <th>Rel (opp)</th>
+                      <th>League PPP (off)</th>
+                      <th>League PPP (def)</th>
+                    </>
+                  ) : null}
+
+                  <th>Rationale</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, idx) => {
+                  const raw = r.raw ?? {};
+                  return (
+                    <tr key={`${r.playType}-${idx}`}>
+                      <td>{idx + 1}</td>
+                      <td>
+                        <strong>{r.playType}</strong>
+                      </td>
+                      <td>{fmt(r.pppPred, 3)}</td>
+                      <td>{fmt(r.pppOff, 3)}</td>
+                      <td>{fmt(r.pppDef, 3)}</td>
+                      <td>{fmt(r.pppGap, 3)}</td>
+
+                      {showMath ? (
+                        <>
+                          <td>{Number.isFinite(Number(raw.POSS_OFF)) ? fmtInt(raw.POSS_OFF) : "—"}</td>
+                          <td>{safePct(raw.POSS_PCT_OFF)}</td>
+                          <td>{fmt(raw.RELIABILITY_WEIGHT_OFF, 3)}</td>
+                          <td>{fmt(raw.RELIABILITY_WEIGHT_DEF, 3)}</td>
+                          <td>{fmt(raw.PPP_LEAGUE_OFF, 3)}</td>
+                          <td>{fmt(raw.PPP_LEAGUE_DEF, 3)}</td>
+                        </>
+                      ) : null}
+
+                      <td style={{ fontSize: 12 }}>{r.rationale}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Committee-friendly note */}
+          <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+            Note: This is the <strong>baseline</strong> recommender. It is deliberately transparent and acts as a
+            reference point. Next, the Context Simulator shows how ML + game-state changes the ranking (and returns
+            an adjustment breakdown).
+          </p>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -1,27 +1,31 @@
-import Link from "next/link";
+// components/Nav.jsx
+//
+// Simple navigation component.
+// Some pages in the repo still import <Nav />.
+// To avoid runtime errors and keep behavior consistent, this Nav matches app/layout.tsx.
+//
+// later want a single source of truth, can remove page-level Nav usage
+// and rely only on the layout navbar
 
-const links = [
-  { href: "/", label: "Home" },
-  { href: "/data-explorer", label: "Data Explorer" },
-  { href: "/matchup", label: "Matchup Console" },
-  { href: "/context", label: "Context Simulator" },
-  { href: "/model-metrics", label: "Model Performance" },
-  { href: "/glossary", label: "Glossary" },
-];
+import Link from "next/link";
 
 export default function Nav() {
   return (
-    <header className="nav">
+    <header className="nav" role="banner">
       <div className="nav-logo">
-        <Link href="/">B-ball Analysts</Link>
-        <span>Basketball Strategy PSPI</span>
+        <Link href="/" style={{ textDecoration: "none", color: "inherit" }}>
+          Strategy Support
+        </Link>
+        <span>Explainable + AI</span>
       </div>
-      <nav className="nav-links">
-        {links.map((link) => (
-          <Link key={link.href} href={link.href}>
-            {link.label}
-          </Link>
-        ))}
+
+      <nav className="nav-links" aria-label="Primary navigation">
+        <Link href="/">Home</Link>
+        <Link href="/data-explorer">Data Explorer</Link>
+        <Link href="/matchup">Matchup (Baseline)</Link>
+        <Link href="/context">Context Simulator (AI)</Link>
+        <Link href="/model-metrics">Model Performance</Link>
+        <Link href="/glossary">Glossary</Link>
       </nav>
     </header>
   );

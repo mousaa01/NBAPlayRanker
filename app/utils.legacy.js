@@ -3,14 +3,14 @@
 // Frontend API helpers for the PSPI.
 //
 // Goals:
-// - Keep the UI thin: pages call these helpers instead of embedding fetch logic.
+// - Keep UI pages thin: pages call these helpers instead of embedding fetch logic.
 // - Make it obvious which endpoints support which use cases.
-// - Use backend-provided dropdown options when available (so we don’t hardcode seasons/teams).
+// - Use backend-provided dropdown options when available (no hardcoding).
 //
 // Endpoints used:
 // - GET  /meta/options
 // - GET  /meta/pipeline
-// - GET  /meta/baseline
+// - GET  /meta/baseline-formula
 // - GET  /data/team-playtypes
 // - GET  /data/team-playtypes.csv
 // - GET  /rank-plays/baseline
@@ -23,8 +23,8 @@ export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 
 /**
- * Fallback lists (used only if /meta/options is unreachable).
- * Keeping these avoids blank dropdowns during local dev if backend isn't running.
+ * Fallback lists (only used if /meta/options is unreachable).
+ * Keeps UI usable during local dev if backend isn't running.
  */
 export const FALLBACK_SEASONS = [
   "2019-20",
@@ -46,7 +46,6 @@ export const FALLBACK_TEAMS = [
 // ---------------------------
 // Small fetch helper
 // ---------------------------
-
 async function fetchJson(url) {
   const res = await fetch(url);
   if (!res.ok) {
@@ -90,18 +89,19 @@ export async function fetchMetaOptions() {
 }
 
 /**
- * Fetch pipeline summary (used by Data Explorer + Model Metrics pages).
- * This helps the committee see the cleaning/aggregation steps clearly.
+ * Pipeline summary (Data Explorer + Model Metrics pages).
+ * Helps committee see cleaning/aggregation steps clearly.
  */
 export async function fetchPipelineInfo() {
   return await fetchJson(`${API_BASE}/meta/pipeline`);
 }
 
 /**
- * Fetch the baseline formula explanation (used by Matchup/Baseline page).
+ * Baseline formula explanation (Matchup/Baseline page).
+ * NOTE: This must match backend route: /meta/baseline-formula
  */
 export async function fetchBaselineInfo() {
-  return await fetchJson(`${API_BASE}/meta/baseline`);
+  return await fetchJson(`${API_BASE}/meta/baseline-formula`);
 }
 
 // ---------------------------
@@ -113,7 +113,8 @@ export async function fetchBaselineInfo() {
  * IMPORTANT: This is NOT recommendations and NOT predictions.
  *
  * Params:
- * - season, team, side, playType (optional)
+ * - season (required)
+ * - team, side, playType (optional)
  * - minPoss (default 0)
  * - limit (default 200)
  *
@@ -141,7 +142,7 @@ export async function fetchTeamPlaytypesPreview({
 
 /**
  * Build a CSV download URL for the Data Explorer table (filtered export).
- * Use this in <a href=... download>Export CSV</a>
+ * Use this in <a href=... target="_blank">Export CSV</a>
  */
 export function getTeamPlaytypesCsvUrl({
   season,
@@ -149,7 +150,6 @@ export function getTeamPlaytypesCsvUrl({
   side,
   playType,
   minPoss = 0,
-  limit = 5000,
 } = {}) {
   const params = new URLSearchParams();
   if (season) params.set("season", season);
@@ -157,7 +157,6 @@ export function getTeamPlaytypesCsvUrl({
   if (side) params.set("side", side);
   if (playType) params.set("play_type", playType);
   if (minPoss != null) params.set("min_poss", String(minPoss));
-  if (limit != null) params.set("limit", String(limit));
 
   return `${API_BASE}/data/team-playtypes.csv?${params.toString()}`;
 }
@@ -169,7 +168,14 @@ export function getTeamPlaytypesCsvUrl({
 /**
  * Call the FastAPI baseline ranking endpoint and normalize into a shape pages can use.
  *
- * Backend returns: { rankings: [{ PLAY_TYPE, PPP_PRED, PPP_OFF_SHRUNK, PPP_DEF_SHRUNK, PPP_GAP, RATIONALE, ... }] }
+ * Backend returns rankings rows including:
+ * - PLAY_TYPE
+ * - PPP_PRED
+ * - PPP_OFF_SHRUNK
+ * - PPP_DEF_SHRUNK
+ * - PPP_GAP
+ * - RATIONALE
+ * - POSS_OFF, POSS_PCT_OFF, RELIABILITY_WEIGHT_OFF/DEF, PPP_LEAGUE_OFF/DEF, etc.
  *
  * Returns: [{ playType, pppPred, pppOff, pppDef, pppGap, rationale, raw }]
  */
@@ -179,15 +185,13 @@ export async function baselineRank({
   opp,
   k = 5,
   wOff = 0.7,
-  wDef = 0.3,
-}) {
+} = {}) {
   const params = new URLSearchParams({
     season,
     our,
     opp,
     k: String(k),
     w_off: String(wOff),
-    w_def: String(wDef),
   });
 
   const data = await fetchJson(`${API_BASE}/rank-plays/baseline?${params.toString()}`);
@@ -207,14 +211,13 @@ export async function baselineRank({
 /**
  * CSV download URL for baseline recommendations
  */
-export function getBaselineCsvUrl({ season, our, opp, k = 5, wOff = 0.7, wDef = 0.3 }) {
+export function getBaselineCsvUrl({ season, our, opp, k = 5, wOff = 0.7 } = {}) {
   const params = new URLSearchParams({
     season,
     our,
     opp,
     k: String(k),
     w_off: String(wOff),
-    w_def: String(wDef),
   });
   return `${API_BASE}/rank-plays/baseline.csv?${params.toString()}`;
 }
@@ -226,7 +229,16 @@ export function getBaselineCsvUrl({ season, our, opp, k = 5, wOff = 0.7, wDef = 
 /**
  * Call the context+ML endpoint.
  *
- * Backend returns: { rankings: [{ PLAY_TYPE, PPP_CONTEXT, PPP_ML_BLEND, PPP_BASELINE, DELTA_VS_BASELINE, CONTEXT_LABEL, RATIONALE, ...}] }
+ * Backend returns rankings rows including:
+ * - PLAY_TYPE
+ * - PPP_CONTEXT
+ * - PPP_ML_BLEND
+ * - PPP_BASELINE
+ * - DELTA_VS_BASELINE
+ * - CONTEXT_LABEL
+ * - CONTEXT_ADJ, BONUS_QUICK, BONUS_SCORE, PENALTY_PROTECT
+ * - LATE_GAME_FACTOR, TRAILING_FACTOR, LEADING_FACTOR
+ * - RATIONALE
  *
  * Returns: [{ playType, finalPPP, mlPPP, baselinePPP, deltaPPP, contextLabel, rationale, raw }]
  */
@@ -236,9 +248,10 @@ export async function contextRank({
   opp,
   margin,
   period,
-  timeRemaining, // seconds remaining in the current period
+  timeRemaining, // seconds remaining in current period
   k = 5,
-}) {
+  wOff = 0.7,
+} = {}) {
   const params = new URLSearchParams({
     season,
     our,
@@ -247,6 +260,7 @@ export async function contextRank({
     period: String(period),
     time_remaining: String(timeRemaining),
     k: String(k),
+    w_off: String(wOff),
   });
 
   const data = await fetchJson(`${API_BASE}/rank-plays/context-ml?${params.toString()}`);
@@ -269,7 +283,7 @@ export async function contextRank({
 // ---------------------------
 
 /**
- * Fetch baseline vs ML evaluation metrics (season holdout).
+ * Fetch baseline vs ML evaluation metrics (season holdout / CV).
  *
  * Response shape:
  * {

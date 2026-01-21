@@ -1,67 +1,149 @@
-"""FastAPI backend for the Basketball Game Strategy Analysis PSPI.
-
-Key idea: one backend API that a non-basketball committee can understand.
-- Data Explorer: show the cleaned dataset the models use.
-- Baseline Recommender: transparent, explainable matchup ranking.
-- Context + ML: shows where "AI" is actually used + how game context changes priorities.
-- Model Metrics: cross-validated baseline vs ML evaluation.
-"""
+# backend/app.py
+#
+# Basketball Strategy backend (FastAPI)
+#
+# This file is intentionally written to be *defense-friendly*:
+# - Clear separation of concerns (data access, baseline, ML, context adjustments)
+# - API endpoints that map 1:1 to the pages in the frontend
+# - Caches expensive artifacts in memory at startup (important for multi-user)
+#
+# Key committee fixes addressed here:
+# Infrastructure for AI models + multi-user: model/data loaded once (startup cache)
+# “Use cases not demonstrated based on AI models”: explicit AI endpoint (/rank-plays/context-ml)
+# “Pipeline cleaning raw data not demonstrated”: /meta/pipeline describes ETL/aggregation steps
+# “Default model used without checking fit”: /metrics/baseline-vs-ml shows CV metrics + optional t-test
+# “Need raw data preview + export”: /data/team-playtypes and /data/team-playtypes.csv
 
 from __future__ import annotations
 
-import csv
-import io
-from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from ml_context_recommender import rank_ml_with_context
+from baseline_recommender import BaselineRecommender, rank_playtypes_baseline
 from ml_models import paired_t_test_rmse, run_cv_evaluation
-from state import baseline_rec, get_baseline_formula, get_meta_options, get_pipeline_info
+
+from ml_stat_analysis import compute_ml_analysis
+
+
+# ---------------------------------------------------------------------
+# App + CORS
+# ---------------------------------------------------------------------
 
 app = FastAPI(
-    title="Basketball Game Strategy API",
+    title="Basketball Strategy API",
     description=(
-        "Backend for the Basketball Game Strategy Analysis capstone."
-        "\n- /data/team-playtypes: dataset preview for Data Explorer"
-        "\n- /rank-plays/baseline: baseline matchup recommendations"
-        "\n- /rank-plays/context-ml: ML + context recommendations"
-        "\n- /metrics/baseline-vs-ml: evaluation metrics"
+        "Backend for the Basketball Strategy Analysis capstone.\n\n"
+        "Endpoints map directly to the frontend pages:\n"
+        "- /meta/options: dropdown options\n"
+        "- /data/team-playtypes: raw aggregated dataset preview + filtering\n"
+        "- /rank-plays/baseline: transparent baseline recommender\n"
+        "- /rank-plays/context-ml: AI use case (ML + context)\n"
+        "- /metrics/baseline-vs-ml: holdout evaluation (defense evidence)\n"
     ),
 )
 
+# Allow local dev + keep permissive for defense demo environments.
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "*",  # permissive for demos
-    ],
+    allow_origins=origins + ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-_OPTIONS = get_meta_options()
-_VALID_SEASONS = set(_OPTIONS["seasons"])
-_VALID_TEAMS = set(_OPTIONS["teams"])
-_VALID_SIDES = {"offense", "defense"}
+# ---------------------------------------------------------------------
+# Startup cache (important for multi-user + performance)
+# ---------------------------------------------------------------------
+
+DATA_DIR = Path(__file__).parent / "data"
+SYNERGY_CSV = DATA_DIR / "synergy_playtypes_2019_2025_players.csv"
+ML_PRED_CSV = DATA_DIR / "ml_offense_ppp_predictions.csv"
+
+# Load baseline tables ONCE and reuse (fast for multi-user requests).
+rec = BaselineRecommender(str(SYNERGY_CSV))
+
+# Cache ML predictions ONCE (if file exists).
+ML_PRED_DF: Optional[pd.DataFrame] = None
+if ML_PRED_CSV.exists():
+    ML_PRED_DF = pd.read_csv(ML_PRED_CSV)
+
+# Precompute meta options from the dataset so we don’t hardcode team/season lists.
+VALID_SEASONS = sorted(rec.team_df["SEASON"].dropna().unique().tolist())
+VALID_TEAMS = sorted(rec.team_df["TEAM_ABBREVIATION"].dropna().unique().tolist())
+VALID_PLAYTYPES = sorted(rec.team_df["PLAY_TYPE"].dropna().unique().tolist())
+VALID_SIDES = ["offense", "defense"]
+
+TEAM_NAMES: Dict[str, str] = {}
+try:
+    tmp = rec.team_df[["TEAM_ABBREVIATION", "TEAM_NAME"]].dropna().drop_duplicates()
+    TEAM_NAMES = {r["TEAM_ABBREVIATION"]: r["TEAM_NAME"] for _, r in tmp.iterrows()}
+except Exception:
+    TEAM_NAMES = {}
+
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
 
 
-def _validate_matchup(season: str, our: str, opp: str) -> None:
-    if season not in _VALID_SEASONS:
-        raise HTTPException(400, f"Unknown season '{season}'.")
-    if our not in _VALID_TEAMS:
-        raise HTTPException(400, f"Unknown team '{our}'.")
-    if opp not in _VALID_TEAMS:
-        raise HTTPException(400, f"Unknown team '{opp}'.")
-    if our == opp:
-        raise HTTPException(400, "Our team and opponent must be different.")
+def _require_season(season: str) -> None:
+    if season not in VALID_SEASONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown season '{season}'. Allowed: {VALID_SEASONS}",
+        )
+
+
+def _require_team(team: str, label: str) -> None:
+    if team not in VALID_TEAMS:
+        raise HTTPException(status_code=400, detail=f"Unknown {label} team code '{team}'.")
+
+
+def _df_to_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Convert a DataFrame to JSON-safe records (NaN -> None)."""
+    clean = df.replace({np.nan: None})
+    return clean.to_dict(orient="records")
+
+
+def _total_seconds_remaining(period: int, time_remaining_period_sec: float) -> float:
+    """
+    Convert (period, seconds remaining in that period) into total seconds remaining in regulation.
+    OT is treated as 0 remaining to represent a 'very late' situation.
+    """
+    if period >= 5:
+        return 0.0
+    total_reg = 4 * 12 * 60  # 2880
+    elapsed = (period - 1) * 12 * 60 + (12 * 60 - time_remaining_period_sec)
+    return float(max(0.0, total_reg - elapsed))
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return float(max(lo, min(hi, x)))
+
+
+# Small hand-crafted “play style” weights for context. (Explainable + stable.)
+QUICK_WEIGHTS = {
+    "Spotup": 1.0,
+    "OffScreen": 0.8,
+    "Cut": 0.6,
+    "Isolation": 0.4,
+}
+
+# ---------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------
 
 
 @app.get("/health")
@@ -69,261 +151,513 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------
+# Meta endpoints (used by frontend dropdowns + defense explanations)
+# ---------------------------------------------------------------------
+
+
 @app.get("/meta/options")
 def meta_options() -> Dict[str, Any]:
-    return get_meta_options()
+    """
+    Dropdown options for the frontend.
+    Derived from the dataset (no hardcoding), so it stays consistent.
+    """
+    return {
+        "seasons": VALID_SEASONS,
+        "teams": VALID_TEAMS,
+        "teamNames": TEAM_NAMES,
+        "playTypes": VALID_PLAYTYPES,
+        "sides": VALID_SIDES,
+        "hasMlPredictions": bool(ML_PRED_DF is not None and not ML_PRED_DF.empty),
+    }
 
 
 @app.get("/meta/pipeline")
-def meta_pipeline() -> Dict[str, Any]:
-    return get_pipeline_info()
+def pipeline_info() -> Dict[str, Any]:
+    """
+    A plain-English explanation of the data pipeline.
+    This is used on the Model Performance page to satisfy the feedback
+    about missing cleaning/processing steps.
+    """
+    return {
+        "dataSource": "Synergy play-type snapshot (player rows) aggregated into team-level play-type tables (offense/defense).",
+        "cleaning_and_aggregation": [
+            "Map Synergy TYPE_GROUPING to SIDE = offense/defense.",
+            "Group player rows into team-level rows by (SEASON, TEAM, PLAY_TYPE, SIDE).",
+            "Compute possession-weighted averages for efficiency stats (PPP, eFG%, TOV%, etc.).",
+            "Compute RELIABILITY_WEIGHT from log1p(POSS) to reduce noise from small samples (used for shrinkage).",
+            "Build league baselines per (SEASON, PLAY_TYPE, SIDE) for shrinkage anchors.",
+        ],
+        "modeling": [
+            "Baseline model: shrink team offense/defense toward league baselines; combine into PPP_PRED.",
+            "ML model: RandomForest predicts offense PPP using team-level play-type features (offline CV).",
+            "AI use case: ML-based PPP blended with opponent defense, then adjusted using small, transparent context bonuses/penalties.",
+        ],
+        "etl_reference": "See backend/data/etl/build_synergy_dataset.R for the dataset build logic (if applicable in your repo).",
+    }
 
 
-@app.get("/meta/baseline")
-def meta_baseline() -> Dict[str, Any]:
-    return get_baseline_formula()
+@app.get("/meta/baseline-formula")
+def baseline_formula() -> Dict[str, Any]:
+    """
+    Baseline formula explanation (so the committee can defend/understand it).
+    """
+    return {
+        "inputs": ["PPP_OFF (team offense)", "PPP_DEF (opponent defense allowed)", "league baselines", "reliability weights"],
+        "shrinkage": "PPP_SHRUNK = REL * PPP_TEAM + (1-REL) * PPP_LEAGUE",
+        "prediction": "PPP_PRED = w_off * PPP_OFF_SHRUNK + w_def * (2*PPP_LEAGUE_OFF - PPP_DEF_SHRUNK)",
+        "defaults": {"w_off": 0.7, "w_def": 0.3},
+        "interpretation": "We combine how efficient we are at a play type with how friendly the opponent is at allowing it, while stabilizing small samples using league averages.",
+    }
+
+
+# ---------------------------------------------------------------------
+# Data Explorer endpoints (raw preview + CSV export)
+# ---------------------------------------------------------------------
 
 
 @app.get("/data/team-playtypes")
-def data_team_playtypes(
-    season: Optional[str] = Query(None),
-    team: Optional[str] = Query(None),
-    side: Optional[str] = Query(None, description="offense|defense"),
-    play_type: Optional[str] = Query(None),
-    min_poss: float = Query(0, ge=0),
-    limit: int = Query(200, ge=1, le=1000),
+def team_playtypes(
+    season: str = Query(..., description="Season label (required)."),
+    team: Optional[str] = Query(None, description="Team abbreviation filter (optional)."),
+    side: Optional[str] = Query(None, description="Side filter: offense/defense (optional)."),
+    play_type: Optional[str] = Query(None, description="Play type filter (optional)."),
+    min_poss: float = Query(0, ge=0, description="Minimum possessions (optional)."),
+    limit: int = Query(200, ge=1, le=2000, description="Rows to return (preview limit)."),
 ) -> Dict[str, Any]:
-    """Preview of the cleaned team-level dataset (NOT recommendations)."""
+    """
+    Returns a preview of the aggregated dataset. NO predictions.
+    This is intentionally 'raw' and exportable for analysts.
+    """
+    _require_season(season)
+    df = rec.team_df.copy()
 
-    df = baseline_rec.team_df.copy()
-
-    if season is not None:
-        if season not in _VALID_SEASONS:
-            raise HTTPException(400, f"Unknown season '{season}'.")
-        df = df[df["SEASON"] == season]
-
-    if team is not None:
-        if team not in _VALID_TEAMS:
-            raise HTTPException(400, f"Unknown team '{team}'.")
+    df = df[df["SEASON"] == season]
+    if team:
+        _require_team(team, "team")
         df = df[df["TEAM_ABBREVIATION"] == team]
-
-    if side is not None:
-        s = str(side).strip().lower()
-        if s not in _VALID_SIDES:
-            raise HTTPException(400, "side must be 'offense' or 'defense'.")
-        df = df[df["SIDE"] == s]
-
-    if play_type is not None:
+    if side:
+        if side not in VALID_SIDES:
+            raise HTTPException(status_code=400, detail="side must be 'offense' or 'defense'")
+        df = df[df["SIDE"] == side]
+    if play_type:
         df = df[df["PLAY_TYPE"] == play_type]
-
     if min_poss > 0:
         df = df[df["POSS"] >= float(min_poss)]
 
-    total_rows = int(df.shape[0])
+    total = int(df.shape[0])
 
+    # Keep the preview columns stable and readable
     keep_cols = [
         "SEASON",
         "TEAM_ABBREVIATION",
         "TEAM_NAME",
-        "PLAY_TYPE",
         "SIDE",
+        "PLAY_TYPE",
         "GP",
         "POSS",
         "POSS_PCT",
         "PPP",
-        "FG_PCT",
         "EFG_PCT",
         "SCORE_POSS_PCT",
         "TOV_POSS_PCT",
-        "SF_POSS_PCT",
-        "FT_POSS_PCT",
-        "PLUSONE_POSS_PCT",
+        "RELIABILITY_WEIGHT",
     ]
     keep_cols = [c for c in keep_cols if c in df.columns]
 
-    df = df[keep_cols].sort_values(
-        ["SEASON", "TEAM_ABBREVIATION", "SIDE", "POSS"],
-        ascending=[True, True, True, False],
-    )
+    df = df[keep_cols].sort_values(["TEAM_ABBREVIATION", "SIDE", "PLAY_TYPE"]).head(limit)
+    records = _df_to_records(df)
 
-    out = df.head(limit)
-    return {
-        "total_rows": total_rows,
-        "returned_rows": int(out.shape[0]),
-        "rows": out.to_dict(orient="records"),
-    }
+    return jsonable_encoder(
+        {
+            "season": season,
+            "total_rows": total,
+            "returned_rows": len(records),
+            "rows": records,
+        }
+    )
 
 
 @app.get("/data/team-playtypes.csv")
-def data_team_playtypes_csv(
-    season: Optional[str] = Query(None),
+def team_playtypes_csv(
+    season: str = Query(...),
     team: Optional[str] = Query(None),
     side: Optional[str] = Query(None),
     play_type: Optional[str] = Query(None),
     min_poss: float = Query(0, ge=0),
-    limit: int = Query(1000, ge=1, le=5000),
-):
-    resp = data_team_playtypes(
-        season=season,
-        team=team,
-        side=side,
-        play_type=play_type,
-        min_poss=min_poss,
-        limit=limit,
-    )
+) -> StreamingResponse:
+    """
+    CSV export for the Data Explorer table.
+    """
+    _require_season(season)
+    df = rec.team_df.copy()
+    df = df[df["SEASON"] == season]
 
-    rows: List[Dict[str, Any]] = resp.get("rows", [])
-
-    buf = io.StringIO()
-    w = csv.writer(buf)
-
-    if not rows:
-        w.writerow(["NO_ROWS"])
-    else:
-        header = list(rows[0].keys())
-        w.writerow(header)
-        for r in rows:
-            w.writerow([r.get(h) for h in header])
-
-    buf.seek(0)
-
-    filename_bits = ["team_playtypes"]
-    if season:
-        filename_bits.append(season)
     if team:
-        filename_bits.append(team)
+        _require_team(team, "team")
+        df = df[df["TEAM_ABBREVIATION"] == team]
     if side:
-        filename_bits.append(side)
-    filename = "_".join(filename_bits) + ".csv"
+        if side not in VALID_SIDES:
+            raise HTTPException(status_code=400, detail="side must be 'offense' or 'defense'")
+        df = df[df["SIDE"] == side]
+    if play_type:
+        df = df[df["PLAY_TYPE"] == play_type]
+    if min_poss > 0:
+        df = df[df["POSS"] >= float(min_poss)]
 
+    df = df.replace({np.nan: None})
+
+    import io
+
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False)
+    buffer.seek(0)
+
+    filename = f"team_playtypes_{season}.csv"
     return StreamingResponse(
-        buf,
+        buffer,
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
+# ---------------------------------------------------------------------
+# Baseline endpoint (transparent + explainable)
+# ---------------------------------------------------------------------
+
+
 @app.get("/rank-plays/baseline")
-def rank_plays_baseline(
+def rank_baseline(
     season: str = Query(...),
-    our: str = Query(...),
-    opp: str = Query(...),
+    our: str = Query(..., description="Our team abbreviation."),
+    opp: str = Query(..., description="Opponent team abbreviation."),
     k: int = Query(5, ge=1, le=10),
     w_off: float = Query(0.7, ge=0, le=1),
-    w_def: float = Query(0.3, ge=0, le=1),
 ) -> Dict[str, Any]:
-    """Explainable baseline matchup ranking.
-
-    PPP_pred = w_off * PPP_off_shrunk + w_def * PPP_def_shrunk
     """
+    Baseline play-type ranking (transparent).
+    Uses shrinkage + a simple blend of our offense and opponent defense.
+    """
+    _require_season(season)
+    _require_team(our, "our")
+    _require_team(opp, "opponent")
+    if our == opp:
+        raise HTTPException(status_code=400, detail="Our team and opponent must be different.")
 
-    _validate_matchup(season, our, opp)
-    if (w_off + w_def) <= 0:
-        raise HTTPException(400, "w_off and w_def cannot both be 0.")
+    w_def = float(1.0 - w_off)
 
     try:
-        df = baseline_rec.rank(
+        df = rank_playtypes_baseline(
+            team_df=rec.team_df,
+            league_df=rec.league_df,
             season=season,
             our_team=our,
             opp_team=opp,
             k=k,
-            w_off=w_off,
+            w_off=float(w_off),
             w_def=w_def,
         )
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
-    norm = float(w_off + w_def)
-    return {
-        "season": season,
-        "our_team": our,
-        "opp_team": opp,
-        "k": int(k),
-        "w_off": float(w_off / norm),
-        "w_def": float(w_def / norm),
-        "rankings": df.to_dict(orient="records"),
-    }
+    return jsonable_encoder(
+        {
+            "season": season,
+            "our_team": our,
+            "opp_team": opp,
+            "k": k,
+            "w_off": float(w_off),
+            "w_def": float(w_def),
+            "rankings": _df_to_records(df),
+        }
+    )
 
 
 @app.get("/rank-plays/baseline.csv")
-def rank_plays_baseline_csv(
+def rank_baseline_csv(
     season: str = Query(...),
     our: str = Query(...),
     opp: str = Query(...),
     k: int = Query(5, ge=1, le=10),
     w_off: float = Query(0.7, ge=0, le=1),
-    w_def: float = Query(0.3, ge=0, le=1),
-):
-    payload = rank_plays_baseline(season=season, our=our, opp=opp, k=k, w_off=w_off, w_def=w_def)
-    rows: List[Dict[str, Any]] = payload["rankings"]
+) -> StreamingResponse:
+    """CSV download for baseline rankings."""
+    w_def = float(1.0 - w_off)
+    try:
+        df = rank_playtypes_baseline(
+            team_df=rec.team_df,
+            league_df=rec.league_df,
+            season=season,
+            our_team=our,
+            opp_team=opp,
+            k=k,
+            w_off=float(w_off),
+            w_def=w_def,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    buf = io.StringIO()
-    w = csv.writer(buf)
+    import io
 
-    if not rows:
-        w.writerow(["NO_ROWS"])
-    else:
-        header = list(rows[0].keys())
-        w.writerow(header)
-        for r in rows:
-            w.writerow([r.get(h) for h in header])
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False)
+    buffer.seek(0)
 
-    buf.seek(0)
     filename = f"baseline_{season}_{our}_vs_{opp}_top{k}.csv"
-
     return StreamingResponse(
-        buf,
+        buffer,
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
+# ---------------------------------------------------------------------
+# AI endpoint: ML + context
+# ---------------------------------------------------------------------
+
+
 @app.get("/rank-plays/context-ml")
-def rank_plays_context_ml(
+def rank_context_ml(
     season: str = Query(...),
     our: str = Query(...),
     opp: str = Query(...),
-    margin: float = Query(...),
+    margin: float = Query(..., description="Our score minus opponent score."),
     period: int = Query(..., ge=1, le=5),
     time_remaining: float = Query(..., ge=0, le=720),
     k: int = Query(5, ge=1, le=10),
+    w_off: float = Query(0.7, ge=0, le=1),
 ) -> Dict[str, Any]:
-    _validate_matchup(season, our, opp)
+    """
+    AI use case:
+      - ML predicts our offense PPP for each play type (offline-trained RandomForest).
+      - Opponent defense is shrunk toward league to avoid small-sample noise.
+      - We blend offense + defense into PPP_ML_BLEND (same structure as baseline).
+      - Then apply small, transparent adjustments from game context (score/time).
+    """
+    _require_season(season)
+    _require_team(our, "our")
+    _require_team(opp, "opponent")
+    if our == opp:
+        raise HTTPException(status_code=400, detail="Our team and opponent must be different.")
 
-    try:
-        df = rank_ml_with_context(
-            season=season,
-            our_team=our,
-            opp_team=opp,
-            margin=float(margin),
-            period=int(period),
-            time_remaining_period_sec=float(time_remaining),
-            k=int(k),
+    if ML_PRED_DF is None or ML_PRED_DF.empty:
+        raise HTTPException(
+            status_code=400,
+            detail="ML predictions not found. Run backend/ml_models.py to generate data/ml_offense_ppp_predictions.csv",
         )
-    except (ValueError, FileNotFoundError) as e:
-        raise HTTPException(400, str(e))
 
-    return {
-        "season": season,
-        "our_team": our,
-        "opp_team": opp,
-        "k": int(k),
-        "margin": float(margin),
-        "period": int(period),
-        "time_remaining_period_sec": float(time_remaining),
-        "rankings": df.to_dict(orient="records"),
-    }
+    w_def = float(1.0 - w_off)
+
+    team_df = rec.team_df
+    league_df = rec.league_df
+
+    # --------------------------
+    # Build matchup base tables
+    # --------------------------
+
+    off = team_df.query(
+        "SEASON == @season and TEAM_ABBREVIATION == @our and SIDE == 'offense'"
+    ).copy()
+
+    deff = team_df.query(
+        "SEASON == @season and TEAM_ABBREVIATION == @opp and SIDE == 'defense'"
+    ).copy()
+
+    if off.empty or deff.empty:
+        raise HTTPException(status_code=400, detail="No offense/defense data for this matchup/season.")
+
+    # Merge ML predictions onto our offense rows
+    ml_slice = ML_PRED_DF[ML_PRED_DF["SEASON"] == season].copy()
+    off = off.merge(
+        ml_slice[["SEASON", "TEAM_ABBREVIATION", "PLAY_TYPE", "PPP_ML"]],
+        on=["SEASON", "TEAM_ABBREVIATION", "PLAY_TYPE"],
+        how="left",
+    )
+
+    # League baselines
+    league_off = league_df.query("SEASON == @season and SIDE == 'offense'")[
+        ["PLAY_TYPE", "PPP"]
+    ].rename(columns={"PPP": "PPP_LEAGUE_OFF"})
+
+    league_def = league_df.query("SEASON == @season and SIDE == 'defense'")[
+        ["PLAY_TYPE", "PPP"]
+    ].rename(columns={"PPP": "PPP_LEAGUE_DEF"})
+
+    # Join offense + defense + league anchors
+    merged = off.merge(
+        deff[
+            [
+                "PLAY_TYPE",
+                "PPP",
+                "POSS",
+                "POSS_PCT",
+                "RELIABILITY_WEIGHT",
+                "EFG_PCT",
+                "TOV_POSS_PCT",
+            ]
+        ].copy(),
+        on="PLAY_TYPE",
+        suffixes=("_OFF", "_DEF"),
+    )
+
+    merged = merged.merge(league_off, on="PLAY_TYPE", how="left")
+    merged = merged.merge(league_def, on="PLAY_TYPE", how="left")
+
+    # --------------------------
+    # Baseline prediction (for comparison)
+    # --------------------------
+    rel_off = merged["RELIABILITY_WEIGHT_OFF"]
+    rel_def = merged["RELIABILITY_WEIGHT_DEF"]
+
+    merged["PPP_OFF_SHRUNK"] = rel_off * merged["PPP_OFF"] + (1 - rel_off) * merged["PPP_LEAGUE_OFF"]
+    merged["PPP_DEF_SHRUNK"] = rel_def * merged["PPP_DEF"] + (1 - rel_def) * merged["PPP_LEAGUE_DEF"]
+
+    merged["PPP_BASELINE"] = (
+        float(w_off) * merged["PPP_OFF_SHRUNK"]
+        + float(w_def) * (2 * merged["PPP_LEAGUE_OFF"] - merged["PPP_DEF_SHRUNK"])
+    )
+
+    # --------------------------
+    # ML blend prediction
+    # --------------------------
+    merged = merged[merged["PPP_ML"].notna()].copy()
+    if merged.empty:
+        raise HTTPException(status_code=400, detail="No ML predictions available for this matchup.")
+
+    merged["PPP_ML_BLEND"] = (
+        float(w_off) * merged["PPP_ML"]
+        + float(w_def) * (2 * merged["PPP_LEAGUE_OFF"] - merged["PPP_DEF_SHRUNK"])
+    )
+
+    # --------------------------
+    # Context adjustments (small + transparent)
+    # --------------------------
+    # late_game_factor ramps up only at the end (strongest in last 3 minutes)
+    T_left = _total_seconds_remaining(period, time_remaining)
+    late_window = 180.0
+    late_game_factor = _clamp((late_window - T_left) / late_window, 0.0, 1.0)
+
+    trailing_factor = _clamp((-margin) / 10.0, 0.0, 1.0) if margin < 0 else 0.0
+    leading_factor = _clamp((margin) / 10.0, 0.0, 1.0) if margin > 0 else 0.0
+
+    # Normalize team EFG and TOV relative to our team’s distribution
+    avg_efg = float(merged["EFG_PCT_OFF"].mean()) if "EFG_PCT_OFF" in merged.columns else 0.0
+    avg_tov = float(merged["TOV_POSS_PCT_OFF"].mean()) if "TOV_POSS_PCT_OFF" in merged.columns else 0.0
+
+    # Quick priority from a small mapping (unknown play types -> 0)
+    merged["QUICK_PRIORITY"] = merged["PLAY_TYPE"].map(QUICK_WEIGHTS).fillna(0.0)
+
+    # Bonuses/penalties are intentionally small (few hundredths of PPP max)
+    merged["BONUS_QUICK"] = (
+        0.04 * late_game_factor * (0.3 + trailing_factor) * merged["QUICK_PRIORITY"]
+    )
+
+    merged["BONUS_SCORE"] = (
+        0.25
+        * late_game_factor
+        * trailing_factor
+        * np.maximum(0.0, merged["EFG_PCT_OFF"] - avg_efg)
+    )
+
+    merged["PENALTY_PROTECT"] = (
+        0.30
+        * late_game_factor
+        * leading_factor
+        * np.maximum(0.0, merged["TOV_POSS_PCT_OFF"] - avg_tov)
+    )
+
+    merged["CONTEXT_ADJ"] = merged["BONUS_QUICK"] + merged["BONUS_SCORE"] - merged["PENALTY_PROTECT"]
+    merged["PPP_CONTEXT"] = merged["PPP_ML_BLEND"] + merged["CONTEXT_ADJ"]
+
+    merged["DELTA_VS_BASELINE"] = merged["PPP_CONTEXT"] - merged["PPP_BASELINE"]
+
+    # Human-friendly label for the context
+    def label_context() -> str:
+        if late_game_factor >= 0.5 and trailing_factor > 0:
+            return "Late & trailing"
+        if late_game_factor >= 0.5 and leading_factor > 0:
+            return "Late & leading"
+        return "Normal context"
+
+    context_label = label_context()
+    merged["CONTEXT_LABEL"] = context_label
+
+    # Rationale string (used in frontend table)
+    def build_rationale(row: pd.Series) -> str:
+        return (
+            f"{row['PLAY_TYPE']}: ML base {row['PPP_ML_BLEND']:.3f}, "
+            f"adj {row['CONTEXT_ADJ']:+.3f} ({context_label}). "
+            f"Late={late_game_factor:.2f}, trailing={trailing_factor:.2f}, leading={leading_factor:.2f}."
+        )
+
+    merged["RATIONALE"] = merged.apply(build_rationale, axis=1)
+
+    # Include factors in output so UI can show exact breakdown
+    merged["LATE_GAME_FACTOR"] = float(late_game_factor)
+    merged["TRAILING_FACTOR"] = float(trailing_factor)
+    merged["LEADING_FACTOR"] = float(leading_factor)
+
+    # Sort by final context PPP
+    merged = merged.sort_values(["PPP_CONTEXT", "PPP_ML_BLEND"], ascending=False).head(k).reset_index(drop=True)
+
+    out_cols = [
+        "PLAY_TYPE",
+        "PPP_CONTEXT",
+        "PPP_ML_BLEND",
+        "PPP_BASELINE",
+        "DELTA_VS_BASELINE",
+        "CONTEXT_LABEL",
+        "RATIONALE",
+        "CONTEXT_ADJ",
+        "BONUS_QUICK",
+        "BONUS_SCORE",
+        "PENALTY_PROTECT",
+        "LATE_GAME_FACTOR",
+        "TRAILING_FACTOR",
+        "LEADING_FACTOR",
+    ]
+
+    out_cols = [c for c in out_cols if c in merged.columns]
+    rankings = _df_to_records(merged[out_cols])
+
+    return jsonable_encoder(
+        {
+            "season": season,
+            "our_team": our,
+            "opp_team": opp,
+            "k": k,
+            "margin": float(margin),
+            "period": int(period),
+            "time_remaining_period_sec": float(time_remaining),
+            "w_off": float(w_off),
+            "w_def": float(w_def),
+            "rankings": rankings,
+        }
+    )
 
 
-@lru_cache(maxsize=8)
-def _cached_cv(n_splits: int) -> Dict[str, Any]:
-    summary_df, fold_metrics = run_cv_evaluation(n_splits=n_splits)
+# ---------------------------------------------------------------------
+# Model evaluation endpoint (defense evidence)
+# ---------------------------------------------------------------------
+
+
+@app.get("/metrics/baseline-vs-ml")
+def baseline_vs_ml(
+    n_splits: int = Query(5, ge=2, le=10, description="K-fold splits used for evaluation."),
+) -> Dict[str, Any]:
+    """
+    Offline evaluation:
+      - Baseline (league mean) vs Ridge vs RandomForest
+      - Returns RMSE/MAE/R² (mean ± std) across folds
+      - Also includes an optional paired t-test (baseline vs RF) when possible
+    """
+    summary_df, fold_metrics = run_cv_evaluation(n_splits=int(n_splits))
 
     metrics: List[Dict[str, Any]] = []
     for model_name, row in summary_df.iterrows():
         metrics.append(
             {
-                "model": str(model_name),
+                "model": model_name,
                 "RMSE_mean": float(row["RMSE_mean"]),
                 "RMSE_std": float(row["RMSE_std"]),
                 "MAE_mean": float(row["MAE_mean"]),
@@ -335,18 +669,26 @@ def _cached_cv(n_splits: int) -> Dict[str, Any]:
 
     t_stat, p_val = paired_t_test_rmse(fold_metrics)
 
-    # NaN-safe handling
-    t_out = None if t_stat != t_stat else float(t_stat)
-    p_out = None if p_val != p_val else float(p_val)
+    return jsonable_encoder(
+        {
+            "n_splits": int(n_splits),
+            "metrics": metrics,
+            "rf_vs_baseline_t": None if (t_stat is None or np.isnan(t_stat)) else float(t_stat),
+            "rf_vs_baseline_p": None if (p_val is None or np.isnan(p_val)) else float(p_val),
+        }
+    )
 
-    return {
-        "n_splits": int(n_splits),
-        "metrics": metrics,
-        "rf_vs_baseline_t": t_out,
-        "rf_vs_baseline_p": p_out,
-    }
-
-
-@app.get("/metrics/baseline-vs-ml")
-def baseline_vs_ml_metrics(n_splits: int = Query(5, ge=2, le=10)) -> Dict[str, Any]:
-    return _cached_cv(int(n_splits))
+@app.get("/analysis/ml")
+def ml_statistical_analysis(
+    n_splits: int = Query(5, ge=2, le=10),
+    min_poss: int = Query(25, ge=0, le=200),
+    refresh: bool = Query(False),
+) -> Dict[str, Any]:
+    payload = compute_ml_analysis(
+        rec.team_df,
+        rec.league_df,
+        n_splits=int(n_splits),
+        min_poss=int(min_poss),
+        force_refresh=bool(refresh),
+    )
+    return jsonable_encoder(payload)
