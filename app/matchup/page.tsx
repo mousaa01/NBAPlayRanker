@@ -9,19 +9,31 @@
 // - Adds KPI summary cards (season/teams/weights) like your Model Metrics/Stat Analysis vibe
 // - Keeps: Top-K ranking, rationale, show-math toggle, CSV export, bars + table
 //
+// ✅ Added ON TOP (without changing your previous logic/UI):
+// - SportyPy “Court map” panel (pick play type from Top-K, generate map)
+// - Per-row “Map” + “PDF” buttons
+// - “Export 1-page PDF” (backend reportlab export)
+//
 // Assumptions about backend payload (unchanged from your current page):
 // - baselineRank(...) returns BaselineRow[]
 // - BaselineRow has playType, pppPred, pppOff, pppDef, pppGap, rationale, raw
 // - raw contains optional POSS_OFF, POSS_PCT_OFF, RELIABILITY_WEIGHT_OFF/DEF, PPP_LEAGUE_OFF/DEF
+//
+// New assumptions for viz/pdf:
+// - utils.ts has fetchPlaytypeViz({season, our, opp, playType, wOff})
+// - backend has GET /viz/playtype-zones returning { caption, image_base64 }
+// - backend has GET /export/playtype-viz.pdf returning a PDF stream
 
 "use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  API_BASE,
   baselineRank,
   fetchBaselineInfo,
   fetchMetaOptions,
+  fetchPlaytypeViz,
   getBaselineCsvUrl,
 } from "../utils";
 
@@ -50,6 +62,11 @@ type BaselineRow = {
   pppGap: number;
   rationale: string;
   raw: Record<string, any>;
+};
+
+type VizResponse = {
+  caption: string;
+  image_base64: string;
 };
 
 function fmt(n: any, digits = 3) {
@@ -128,6 +145,12 @@ export default function MatchupPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [showMath, setShowMath] = useState(false);
+
+  // ✅ Viz state (added)
+  const [vizPlayType, setVizPlayType] = useState<string>("");
+  const [viz, setViz] = useState<VizResponse | null>(null);
+  const [vizLoading, setVizLoading] = useState(false);
+  const [vizError, setVizError] = useState<string | null>(null);
 
   // Prevent repeated auto-run
   const didAutoRunRef = useRef(false);
@@ -241,6 +264,67 @@ export default function MatchupPage() {
     }
   }
 
+  // ✅ Reset viz when matchup inputs change (added)
+  useEffect(() => {
+    setViz(null);
+    setVizError(null);
+    setVizPlayType("");
+  }, [season, our, opp, k, wOff, wDef]);
+
+  // ✅ Export PDF URL builder (added)
+  function getPdfUrlForPlayType(playType: string) {
+    if (!season || !our || !opp || !playType) return "#";
+    const norm = normalizeWeights(wOff, wDef);
+
+    const params = new URLSearchParams({
+      season,
+      our,
+      opp,
+      play_type: playType,
+      k: String(k),
+      w_off: String(norm.wOff),
+    });
+
+    return `${API_BASE}/export/playtype-viz.pdf?${params.toString()}`;
+  }
+
+  // ✅ Viz runner (added)
+  async function runViz(playTypeOverride?: string) {
+    const pt = (playTypeOverride ?? vizPlayType)?.trim();
+    if (!pt) {
+      setVizError("Pick a play type first.");
+      return;
+    }
+    if (!season || !our || !opp) {
+      setVizError("Select season/teams first.");
+      return;
+    }
+
+    try {
+      setVizLoading(true);
+      setVizError(null);
+      setViz(null);
+
+      const norm = normalizeWeights(wOff, wDef);
+
+      const out = await fetchPlaytypeViz({
+        season,
+        our,
+        opp,
+        playType: pt,
+        wOff: norm.wOff,
+      });
+
+      setViz(out);
+    } catch (e: any) {
+      console.error(e);
+      setVizError(e?.message ?? "Failed to generate court visualization.");
+      setViz(null);
+    } finally {
+      setVizLoading(false);
+    }
+  }
+
   // Auto-run once defaults are ready (only once)
   useEffect(() => {
     const metaReady = (meta?.seasons?.length ?? 0) > 0 && (meta?.teams?.length ?? 0) > 0;
@@ -261,6 +345,13 @@ export default function MatchupPage() {
     if (!valid.length) return null;
     return valid[0];
   }, [rows]);
+
+  // ✅ default viz play type to the #1 recommendation (added)
+  useEffect(() => {
+    if (!rows.length) return;
+    if (vizPlayType) return;
+    if (bestRow?.playType) setVizPlayType(bestRow.playType);
+  }, [rows, bestRow, vizPlayType]);
 
   return (
     <section className="card">
@@ -290,8 +381,7 @@ export default function MatchupPage() {
         <h2 style={{ margin: "8px 0 6px", fontSize: 16 }}>Baseline formula</h2>
         <p className="muted" style={{ fontSize: 13 }}>
           <code>
-            {baselineInfo?.formula ??
-              "PPP_PRED = w_off * PPP_OFF_SHRUNK + w_def * PPP_DEF_SHRUNK"}
+            {baselineInfo?.formula ?? "PPP_PRED = w_off * PPP_OFF_SHRUNK + w_def * PPP_DEF_SHRUNK"}
           </code>
         </p>
 
@@ -497,8 +587,103 @@ export default function MatchupPage() {
               <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
                 Rationale: {bestRow.rationale}
               </div>
+
+              {/* ✅ Added: quick map + pdf buttons (doesn’t change existing content) */}
+              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => {
+                    setVizPlayType(bestRow.playType);
+                    runViz(bestRow.playType);
+                  }}
+                  disabled={vizLoading}
+                >
+                  {vizLoading ? "Generating map…" : "Generate court map"}
+                </button>
+
+                <a
+                  className="btn"
+                  href={getPdfUrlForPlayType(bestRow.playType)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Export 1-page PDF
+                </a>
+              </div>
             </div>
           ) : null}
+
+          {/* ✅ Added: SportyPy visualization panel */}
+          <div className="kpi" style={{ marginTop: 12 }}>
+            <div className="label">Court map (SportyPy)</div>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span className="muted" style={{ fontSize: 12 }}>Play type</span>
+                <select
+                  className="input"
+                  value={vizPlayType}
+                  onChange={(e) => setVizPlayType(e.target.value)}
+                  style={{ minWidth: 260 }}
+                >
+                  {rows.map((r) => (
+                    <option key={r.playType} value={r.playType}>
+                      {r.playType}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <button className="btn" type="button" onClick={() => runViz()} disabled={vizLoading}>
+                {vizLoading ? "Generating map…" : "Generate map"}
+              </button>
+
+              <a
+                className="btn"
+                href={getPdfUrlForPlayType(vizPlayType)}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-disabled={!vizPlayType}
+              >
+                Export 1-page PDF
+              </a>
+            </div>
+
+            {vizError ? (
+              <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+                {vizError}
+              </p>
+            ) : null}
+
+            {!viz ? (
+              <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+                Generate a court map to attach a visual to your recommendation (fast, coach-friendly, “feels real”).
+              </p>
+            ) : (
+              <div style={{ marginTop: 12 }}>
+                <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                  {viz.caption}
+                </p>
+
+                <div
+                  style={{
+                    width: "100%",
+                    overflow: "hidden",
+                    borderRadius: 12,
+                    border: "1px solid rgba(15,23,42,0.12)",
+                    background: "rgba(15,23,42,0.02)",
+                  }}
+                >
+                  <img
+                    src={`data:image/png;base64,${viz.image_base64}`}
+                    alt="Court map"
+                    style={{ width: "100%", height: "auto", display: "block" }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Bars */}
           <div style={{ marginTop: 12 }}>
@@ -560,6 +745,10 @@ export default function MatchupPage() {
                 <tr>
                   <th>#</th>
                   <th>Play Type</th>
+
+                  {/* ✅ Added (doesn’t alter existing columns) */}
+                  <th>Viz</th>
+
                   <th>Pred PPP</th>
                   <th>Our PPP (shrunk)</th>
                   <th>Opp Allowed (shrunk)</th>
@@ -588,6 +777,31 @@ export default function MatchupPage() {
                       <td>
                         <strong>{r.playType}</strong>
                       </td>
+
+                      {/* ✅ Added: row actions */}
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <button
+                          className="btn"
+                          type="button"
+                          onClick={() => {
+                            setVizPlayType(r.playType);
+                            runViz(r.playType);
+                          }}
+                          disabled={vizLoading}
+                        >
+                          Map
+                        </button>
+                        <a
+                          className="btn"
+                          href={getPdfUrlForPlayType(r.playType)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ marginLeft: 8 }}
+                        >
+                          PDF
+                        </a>
+                      </td>
+
                       <td>{fmt(r.pppPred, 3)}</td>
                       <td>{fmt(r.pppOff, 3)}</td>
                       <td>{fmt(r.pppDef, 3)}</td>

@@ -13,6 +13,7 @@
 // - GET  /rank-plays/context-ml
 // - GET  /metrics/baseline-vs-ml
 // - GET  /analysis/ml   <-- Statistical Analysis page
+// - GET  /viz/playtype-zones  <-- SportyPy visualization
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
@@ -212,7 +213,8 @@ export async function baselineRank(opts: {
     raw: Record<string, any>;
   }>
 > {
-  const { season, our, opp, k = 5, wOff = 0.7 } = opts;
+  // ✅ FIX: destructure wDef so it exists (and give it a safe default)
+  const { season, our, opp, k = 5, wOff = 0.7, wDef = 0.3 } = opts;
 
   const params = new URLSearchParams({
     season,
@@ -358,5 +360,29 @@ export async function fetchMlAnalysis(opts?: {
 
   return await fetchJson<MlAnalysisResponse>(
     `${API_BASE}/analysis/ml?${params.toString()}`
+  );
+}
+
+// ---------------------------
+// SportyPy Visualization (Matchup page add-on)
+// ---------------------------
+
+export async function fetchPlaytypeViz(opts: {
+  season: string;
+  our: string;
+  opp: string;
+  playType: string;
+  wOff: number;
+}) {
+  const params = new URLSearchParams({
+    season: opts.season,
+    our: opts.our,
+    opp: opts.opp,
+    play_type: opts.playType,
+    w_off: String(opts.wOff),
+  });
+
+  return await fetchJson<{ caption: string; image_base64: string }>(
+    `${API_BASE}/viz/playtype-zones?${params.toString()}`
   );
 }

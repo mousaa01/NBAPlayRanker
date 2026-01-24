@@ -28,9 +28,14 @@ from fastapi.responses import StreamingResponse
 
 from baseline_recommender import BaselineRecommender, rank_playtypes_baseline
 from ml_models import paired_t_test_rmse, run_cv_evaluation
-
 from ml_stat_analysis import compute_ml_analysis
 
+from export_pdf import create_pdf_router
+
+# IMPORTANT:
+# Do NOT import viz_sportypy here at module load time.
+# If SportyPy isn't installed (or is slow/import-heavy), it can prevent the API from starting.
+# We'll lazy-import it inside the /viz endpoint.
 
 # ---------------------------------------------------------------------
 # App + CORS
@@ -247,7 +252,6 @@ def team_playtypes(
 
     total = int(df.shape[0])
 
-    # Keep the preview columns stable and readable
     keep_cols = [
         "SEASON",
         "TEAM_ABBREVIATION",
@@ -286,9 +290,7 @@ def team_playtypes_csv(
     play_type: Optional[str] = Query(None),
     min_poss: float = Query(0, ge=0),
 ) -> StreamingResponse:
-    """
-    CSV export for the Data Explorer table.
-    """
+    """CSV export for the Data Explorer table."""
     _require_season(season)
     df = rec.team_df.copy()
     df = df[df["SEASON"] == season]
@@ -334,10 +336,7 @@ def rank_baseline(
     k: int = Query(5, ge=1, le=10),
     w_off: float = Query(0.7, ge=0, le=1),
 ) -> Dict[str, Any]:
-    """
-    Baseline play-type ranking (transparent).
-    Uses shrinkage + a simple blend of our offense and opponent defense.
-    """
+    """Baseline play-type ranking (transparent)."""
     _require_season(season)
     _require_team(our, "our")
     _require_team(opp, "opponent")
@@ -431,8 +430,8 @@ def rank_context_ml(
     AI use case:
       - ML predicts our offense PPP for each play type (offline-trained RandomForest).
       - Opponent defense is shrunk toward league to avoid small-sample noise.
-      - We blend offense + defense into PPP_ML_BLEND (same structure as baseline).
-      - Then apply small, transparent adjustments from game context (score/time).
+      - Blend offense + defense into PPP_ML_BLEND.
+      - Apply small, transparent adjustments from game context (score/time).
     """
     _require_season(season)
     _require_team(our, "our")
@@ -451,22 +450,12 @@ def rank_context_ml(
     team_df = rec.team_df
     league_df = rec.league_df
 
-    # --------------------------
-    # Build matchup base tables
-    # --------------------------
-
-    off = team_df.query(
-        "SEASON == @season and TEAM_ABBREVIATION == @our and SIDE == 'offense'"
-    ).copy()
-
-    deff = team_df.query(
-        "SEASON == @season and TEAM_ABBREVIATION == @opp and SIDE == 'defense'"
-    ).copy()
+    off = team_df.query("SEASON == @season and TEAM_ABBREVIATION == @our and SIDE == 'offense'").copy()
+    deff = team_df.query("SEASON == @season and TEAM_ABBREVIATION == @opp and SIDE == 'defense'").copy()
 
     if off.empty or deff.empty:
         raise HTTPException(status_code=400, detail="No offense/defense data for this matchup/season.")
 
-    # Merge ML predictions onto our offense rows
     ml_slice = ML_PRED_DF[ML_PRED_DF["SEASON"] == season].copy()
     off = off.merge(
         ml_slice[["SEASON", "TEAM_ABBREVIATION", "PLAY_TYPE", "PPP_ML"]],
@@ -474,38 +463,23 @@ def rank_context_ml(
         how="left",
     )
 
-    # League baselines
-    league_off = league_df.query("SEASON == @season and SIDE == 'offense'")[
-        ["PLAY_TYPE", "PPP"]
-    ].rename(columns={"PPP": "PPP_LEAGUE_OFF"})
+    league_off = league_df.query("SEASON == @season and SIDE == 'offense'")[["PLAY_TYPE", "PPP"]].rename(
+        columns={"PPP": "PPP_LEAGUE_OFF"}
+    )
+    league_def = league_df.query("SEASON == @season and SIDE == 'defense'")[["PLAY_TYPE", "PPP"]].rename(
+        columns={"PPP": "PPP_LEAGUE_DEF"}
+    )
 
-    league_def = league_df.query("SEASON == @season and SIDE == 'defense'")[
-        ["PLAY_TYPE", "PPP"]
-    ].rename(columns={"PPP": "PPP_LEAGUE_DEF"})
-
-    # Join offense + defense + league anchors
     merged = off.merge(
         deff[
-            [
-                "PLAY_TYPE",
-                "PPP",
-                "POSS",
-                "POSS_PCT",
-                "RELIABILITY_WEIGHT",
-                "EFG_PCT",
-                "TOV_POSS_PCT",
-            ]
+            ["PLAY_TYPE", "PPP", "POSS", "POSS_PCT", "RELIABILITY_WEIGHT", "EFG_PCT", "TOV_POSS_PCT"]
         ].copy(),
         on="PLAY_TYPE",
         suffixes=("_OFF", "_DEF"),
     )
-
     merged = merged.merge(league_off, on="PLAY_TYPE", how="left")
     merged = merged.merge(league_def, on="PLAY_TYPE", how="left")
 
-    # --------------------------
-    # Baseline prediction (for comparison)
-    # --------------------------
     rel_off = merged["RELIABILITY_WEIGHT_OFF"]
     rel_def = merged["RELIABILITY_WEIGHT_DEF"]
 
@@ -517,9 +491,6 @@ def rank_context_ml(
         + float(w_def) * (2 * merged["PPP_LEAGUE_OFF"] - merged["PPP_DEF_SHRUNK"])
     )
 
-    # --------------------------
-    # ML blend prediction
-    # --------------------------
     merged = merged[merged["PPP_ML"].notna()].copy()
     if merged.empty:
         raise HTTPException(status_code=400, detail="No ML predictions available for this matchup.")
@@ -529,10 +500,6 @@ def rank_context_ml(
         + float(w_def) * (2 * merged["PPP_LEAGUE_OFF"] - merged["PPP_DEF_SHRUNK"])
     )
 
-    # --------------------------
-    # Context adjustments (small + transparent)
-    # --------------------------
-    # late_game_factor ramps up only at the end (strongest in last 3 minutes)
     T_left = _total_seconds_remaining(period, time_remaining)
     late_window = 180.0
     late_game_factor = _clamp((late_window - T_left) / late_window, 0.0, 1.0)
@@ -540,38 +507,23 @@ def rank_context_ml(
     trailing_factor = _clamp((-margin) / 10.0, 0.0, 1.0) if margin < 0 else 0.0
     leading_factor = _clamp((margin) / 10.0, 0.0, 1.0) if margin > 0 else 0.0
 
-    # Normalize team EFG and TOV relative to our team’s distribution
     avg_efg = float(merged["EFG_PCT_OFF"].mean()) if "EFG_PCT_OFF" in merged.columns else 0.0
     avg_tov = float(merged["TOV_POSS_PCT_OFF"].mean()) if "TOV_POSS_PCT_OFF" in merged.columns else 0.0
 
-    # Quick priority from a small mapping (unknown play types -> 0)
     merged["QUICK_PRIORITY"] = merged["PLAY_TYPE"].map(QUICK_WEIGHTS).fillna(0.0)
 
-    # Bonuses/penalties are intentionally small (few hundredths of PPP max)
-    merged["BONUS_QUICK"] = (
-        0.04 * late_game_factor * (0.3 + trailing_factor) * merged["QUICK_PRIORITY"]
-    )
-
+    merged["BONUS_QUICK"] = 0.04 * late_game_factor * (0.3 + trailing_factor) * merged["QUICK_PRIORITY"]
     merged["BONUS_SCORE"] = (
-        0.25
-        * late_game_factor
-        * trailing_factor
-        * np.maximum(0.0, merged["EFG_PCT_OFF"] - avg_efg)
+        0.25 * late_game_factor * trailing_factor * np.maximum(0.0, merged["EFG_PCT_OFF"] - avg_efg)
     )
-
     merged["PENALTY_PROTECT"] = (
-        0.30
-        * late_game_factor
-        * leading_factor
-        * np.maximum(0.0, merged["TOV_POSS_PCT_OFF"] - avg_tov)
+        0.30 * late_game_factor * leading_factor * np.maximum(0.0, merged["TOV_POSS_PCT_OFF"] - avg_tov)
     )
 
     merged["CONTEXT_ADJ"] = merged["BONUS_QUICK"] + merged["BONUS_SCORE"] - merged["PENALTY_PROTECT"]
     merged["PPP_CONTEXT"] = merged["PPP_ML_BLEND"] + merged["CONTEXT_ADJ"]
-
     merged["DELTA_VS_BASELINE"] = merged["PPP_CONTEXT"] - merged["PPP_BASELINE"]
 
-    # Human-friendly label for the context
     def label_context() -> str:
         if late_game_factor >= 0.5 and trailing_factor > 0:
             return "Late & trailing"
@@ -582,7 +534,6 @@ def rank_context_ml(
     context_label = label_context()
     merged["CONTEXT_LABEL"] = context_label
 
-    # Rationale string (used in frontend table)
     def build_rationale(row: pd.Series) -> str:
         return (
             f"{row['PLAY_TYPE']}: ML base {row['PPP_ML_BLEND']:.3f}, "
@@ -591,13 +542,10 @@ def rank_context_ml(
         )
 
     merged["RATIONALE"] = merged.apply(build_rationale, axis=1)
-
-    # Include factors in output so UI can show exact breakdown
     merged["LATE_GAME_FACTOR"] = float(late_game_factor)
     merged["TRAILING_FACTOR"] = float(trailing_factor)
     merged["LEADING_FACTOR"] = float(leading_factor)
 
-    # Sort by final context PPP
     merged = merged.sort_values(["PPP_CONTEXT", "PPP_ML_BLEND"], ascending=False).head(k).reset_index(drop=True)
 
     out_cols = [
@@ -616,7 +564,6 @@ def rank_context_ml(
         "TRAILING_FACTOR",
         "LEADING_FACTOR",
     ]
-
     out_cols = [c for c in out_cols if c in merged.columns]
     rankings = _df_to_records(merged[out_cols])
 
@@ -645,12 +592,6 @@ def rank_context_ml(
 def baseline_vs_ml(
     n_splits: int = Query(5, ge=2, le=10, description="K-fold splits used for evaluation."),
 ) -> Dict[str, Any]:
-    """
-    Offline evaluation:
-      - Baseline (league mean) vs Ridge vs RandomForest
-      - Returns RMSE/MAE/R² (mean ± std) across folds
-      - Also includes an optional paired t-test (baseline vs RF) when possible
-    """
     summary_df, fold_metrics = run_cv_evaluation(n_splits=int(n_splits))
 
     metrics: List[Dict[str, Any]] = []
@@ -678,6 +619,7 @@ def baseline_vs_ml(
         }
     )
 
+
 @app.get("/analysis/ml")
 def ml_statistical_analysis(
     n_splits: int = Query(5, ge=2, le=10),
@@ -692,3 +634,72 @@ def ml_statistical_analysis(
         force_refresh=bool(refresh),
     )
     return jsonable_encoder(payload)
+
+
+# ---------------------------------------------------------------------
+# SportyPy visualization endpoint
+# ---------------------------------------------------------------------
+
+
+@app.get("/viz/playtype-zones")
+def viz_playtype_zones(
+    season: str = Query(...),
+    our: str = Query(...),
+    opp: str = Query(...),
+    play_type: str = Query(...),
+    w_off: float = Query(0.7, ge=0, le=1),
+) -> Dict[str, Any]:
+    _require_season(season)
+    _require_team(our, "our")
+    _require_team(opp, "opponent")
+    if our == opp:
+        raise HTTPException(status_code=400, detail="Our team and opponent must be different.")
+
+    # Lazy-import viz module so backend can start even if SportyPy deps are missing
+    try:
+        from viz_sportypy import render_playtype_zone_png, png_bytes_to_base64
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "SportyPy visualization import failed. "
+                "Make sure you installed backend deps inside the backend venv:\n"
+                "  python3 -m pip install sportypy matplotlib pillow\n"
+                f"Import error: {e}"
+            ),
+        )
+
+    w_def = 1.0 - float(w_off)
+
+    df = rank_playtypes_baseline(
+        team_df=rec.team_df,
+        league_df=rec.league_df,
+        season=season,
+        our_team=our,
+        opp_team=opp,
+        k=10,
+        w_off=float(w_off),
+        w_def=float(w_def),
+    )
+
+    row = df[df["PLAY_TYPE"] == play_type]
+    if row.empty:
+        raise HTTPException(status_code=404, detail="Play type not found in Top-K output.")
+
+    r = row.iloc[0]
+    caption = (
+        f"{play_type}: Pred {float(r['PPP_PRED']):.3f} PPP. "
+        f"Our(off) {float(r['PPP_OFF_SHRUNK']):.3f} vs Opp(def) {float(r['PPP_DEF_SHRUNK']):.3f}."
+    )
+
+    title = f"{our} vs {opp} • {season} • {play_type}"
+    png = render_playtype_zone_png(play_type, title)
+
+    return {"caption": caption, "image_base64": png_bytes_to_base64(png)}
+
+
+# ---------------------------------------------------------------------
+# Routers (must be registered AFTER app/rec/meta are defined)
+# ---------------------------------------------------------------------
+
+app.include_router(create_pdf_router(rec, VALID_SEASONS, VALID_TEAMS, TEAM_NAMES))
