@@ -27,8 +27,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from baseline_recommender import BaselineRecommender, rank_playtypes_baseline
+from shot_baseline_recommender import ShotBaselineRecommender
+from shot_etl import CLEAN_PARQUET
 from ml_models import paired_t_test_rmse, run_cv_evaluation
 from ml_stat_analysis import compute_ml_analysis
+from shot_ml_models import run_shot_model_cv
+from shot_ml_stat_analysis import compute_shot_ml_analysis
 
 from export_pdf import create_pdf_router
 
@@ -85,6 +89,10 @@ ML_PRED_DF: Optional[pd.DataFrame] = None
 if ML_PRED_CSV.exists():
     ML_PRED_DF = pd.read_csv(ML_PRED_CSV)
 
+# Shot Intelligence caches (lazy-loaded)
+SHOT_REC: Optional[ShotBaselineRecommender] = None
+SHOT_CLEAN_DF: Optional[pd.DataFrame] = None
+
 # Precompute meta options from the dataset so we don’t hardcode team/season lists.
 VALID_SEASONS = sorted(rec.team_df["SEASON"].dropna().unique().tolist())
 VALID_TEAMS = sorted(rec.team_df["TEAM_ABBREVIATION"].dropna().unique().tolist())
@@ -120,6 +128,38 @@ def _df_to_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Convert a DataFrame to JSON-safe records (NaN -> None)."""
     clean = df.replace({np.nan: None})
     return clean.to_dict(orient="records")
+
+
+def _get_shot_rec() -> ShotBaselineRecommender:
+    global SHOT_REC
+    if SHOT_REC is None:
+        try:
+            SHOT_REC = ShotBaselineRecommender()
+        except FileNotFoundError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Shot aggregates not found. Run:\n"
+                    "  python backend/shot_aggregates.py\n"
+                    f"Missing: {e}"
+                ),
+            )
+    return SHOT_REC
+
+
+def _get_shots_clean_df() -> pd.DataFrame:
+    global SHOT_CLEAN_DF
+    if SHOT_CLEAN_DF is None:
+        if not CLEAN_PARQUET.exists():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "shots_clean.parquet not found. Run:\n"
+                    "  python backend/data/etl/build_shots_dataset.py"
+                ),
+            )
+        SHOT_CLEAN_DF = pd.read_parquet(CLEAN_PARQUET)
+    return SHOT_CLEAN_DF
 
 
 def _total_seconds_remaining(period: int, time_remaining_period_sec: float) -> float:
@@ -620,6 +660,27 @@ def baseline_vs_ml(
     )
 
 
+@app.get("/metrics/shot-models")
+def shot_models_metrics(
+    n_splits: int = Query(5, ge=2, le=10, description="GroupKFold splits by GAME_ID."),
+) -> Dict[str, Any]:
+    summary_df, _ = run_shot_model_cv(n_splits=int(n_splits), random_state=42)
+    metrics: List[Dict[str, Any]] = []
+    for model_name, row in summary_df.iterrows():
+        metrics.append(
+            {
+                "model": model_name,
+                "RMSE_mean": float(row["RMSE_mean"]),
+                "RMSE_std": float(row["RMSE_std"]),
+                "MAE_mean": float(row["MAE_mean"]),
+                "MAE_std": float(row["MAE_std"]),
+                "R2_mean": float(row["R2_mean"]),
+                "R2_std": float(row["R2_std"]),
+            }
+        )
+    return jsonable_encoder({"n_splits": int(n_splits), "metrics": metrics})
+
+
 @app.get("/analysis/ml")
 def ml_statistical_analysis(
     n_splits: int = Query(5, ge=2, le=10),
@@ -633,6 +694,15 @@ def ml_statistical_analysis(
         min_poss=int(min_poss),
         force_refresh=bool(refresh),
     )
+    return jsonable_encoder(payload)
+
+
+@app.get("/analysis/shot-ml")
+def shot_statistical_analysis(
+    n_splits: int = Query(5, ge=2, le=10),
+    refresh: bool = Query(False),
+) -> Dict[str, Any]:
+    payload = compute_shot_ml_analysis(n_splits=int(n_splits), force_refresh=bool(refresh))
     return jsonable_encoder(payload)
 
 
@@ -696,6 +766,112 @@ def viz_playtype_zones(
     png = render_playtype_zone_png(play_type, title)
 
     return {"caption": caption, "image_base64": png_bytes_to_base64(png)}
+
+
+# ---------------------------------------------------------------------
+# Shot Intelligence endpoints (Dataset 2)
+# ---------------------------------------------------------------------
+
+
+@app.get("/shotplan/rank")
+def rank_shotplan(
+    season: str = Query(...),
+    our: str = Query(..., description="Our team abbreviation."),
+    opp: str = Query(..., description="Opponent team abbreviation."),
+    k: int = Query(5, ge=1, le=10),
+    w_off: float = Query(0.7, ge=0, le=1),
+) -> Dict[str, Any]:
+    w_def = float(1.0 - w_off)
+    rec_shot = _get_shot_rec()
+    try:
+        result = rec_shot.rank(season=season, our_team=our, opp_team=opp, k=int(k), w_off=float(w_off))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return jsonable_encoder(
+        {
+            "season": season,
+            "our_team": our,
+            "opp_team": opp,
+            "k": int(k),
+            "w_off": float(w_off),
+            "w_def": float(w_def),
+            "best_shooter": None,
+            "top_shot_types": result.get("top_shot_types", []),
+            "top_zones": result.get("top_zones", []),
+            "metadata": {"data_source": "nba_pbp_2021_present.parquet"},
+        }
+    )
+
+
+@app.get("/viz/shot-heatmap")
+def viz_shot_heatmap(
+    season: str = Query(...),
+    our: str = Query(...),
+    opp: str = Query(...),
+    shot_type: Optional[str] = Query(None),
+    zone: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    # Lazy import to avoid SportyPy import issues at startup
+    try:
+        from viz_shot_heatmap import render_shot_heatmap_png, png_bytes_to_base64
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Shot heatmap import failed. Install backend deps:\n"
+                "  python3 -m pip install sportypy matplotlib pillow\n"
+                f"Import error: {e}"
+            ),
+        )
+
+    shots_df = _get_shots_clean_df()
+    title = f"{our} vs {opp} • {season}"
+    png = render_shot_heatmap_png(
+        shots_df=shots_df,
+        season=season,
+        our_team=our,
+        opp_team=opp,
+        shot_type=shot_type,
+        zone=zone,
+        title=title,
+    )
+    caption = f"Shot Heatmap • {our} vs {opp} • {season}"
+    return {"caption": caption, "image_base64": png_bytes_to_base64(png)}
+
+
+@app.get("/export/shotplan.pdf")
+def export_shotplan_pdf(
+    season: str = Query(...),
+    our: str = Query(...),
+    opp: str = Query(...),
+    k: int = Query(5, ge=1, le=10),
+    w_off: float = Query(0.7, ge=0, le=1),
+    shot_type: Optional[str] = Query(None),
+    zone: Optional[str] = Query(None),
+) -> StreamingResponse:
+    try:
+        from export_shotplan_pdf import build_shotplan_pdf
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"export_shotplan_pdf.py missing or failed to import. Error: {e}",
+        )
+
+    pdf_bytes, filename = build_shotplan_pdf(
+        season=season,
+        our=our,
+        opp=opp,
+        k=int(k),
+        w_off=float(w_off),
+        shot_type=shot_type,
+        zone=zone,
+    )
+    return StreamingResponse(
+        pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---------------------------------------------------------------------

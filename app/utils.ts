@@ -117,6 +117,47 @@ export type MlAnalysisResponse = {
   model_selection: any;
 };
 
+// Shot Intelligence responses
+export type ShotPlanRankResponse = {
+  season: string;
+  our_team: string;
+  opp_team: string;
+  k: number;
+  w_off: number;
+  w_def: number;
+  best_shooter?: any;
+  top_shot_types: Record<string, any>[];
+  top_zones: Record<string, any>[];
+  metadata?: any;
+};
+
+export type ShotHeatmapResponse = {
+  caption: string;
+  image_base64: string;
+};
+
+export type ShotModelMetricsResponse = {
+  n_splits: number;
+  metrics: Array<{
+    model: string;
+    RMSE_mean: number;
+    RMSE_std: number;
+    MAE_mean: number;
+    MAE_std: number;
+    R2_mean: number;
+    R2_std: number;
+  }>;
+};
+
+export type ShotMlAnalysisResponse = {
+  dataset: any;
+  eda: any;
+  correlations: { labels: string[]; matrix: number[][] };
+  target_feature_corr: Array<{ feature: string; corr: number; abs: number }>;
+  feature_selection: any;
+  model_selection: any;
+};
+
 // ---------------------------
 // Meta
 // ---------------------------
@@ -384,5 +425,89 @@ export async function fetchPlaytypeViz(opts: {
 
   return await fetchJson<{ caption: string; image_base64: string }>(
     `${API_BASE}/viz/playtype-zones?${params.toString()}`
+  );
+}
+
+// ---------------------------
+// Shot Intelligence (Dataset 2)
+// ---------------------------
+
+export async function fetchShotPlanRank(opts: {
+  season: string;
+  our: string;
+  opp: string;
+  k?: number;
+  wOff?: number;
+}): Promise<ShotPlanRankResponse> {
+  const { season, our, opp, k = 5, wOff = 0.7 } = opts;
+  const params = new URLSearchParams({
+    season,
+    our,
+    opp,
+    k: String(k),
+    w_off: String(wOff),
+  });
+  return await fetchJson<ShotPlanRankResponse>(`${API_BASE}/shotplan/rank?${params.toString()}`);
+}
+
+export async function fetchShotHeatmap(opts: {
+  season: string;
+  our: string;
+  opp: string;
+  shotType?: string;
+  zone?: string;
+}): Promise<ShotHeatmapResponse> {
+  const params = new URLSearchParams({
+    season: opts.season,
+    our: opts.our,
+    opp: opts.opp,
+  });
+  if (opts.shotType) params.set("shot_type", opts.shotType);
+  if (opts.zone) params.set("zone", opts.zone);
+
+  return await fetchJson<ShotHeatmapResponse>(`${API_BASE}/viz/shot-heatmap?${params.toString()}`);
+}
+
+export function getShotPlanPdfUrl(opts: {
+  season: string;
+  our: string;
+  opp: string;
+  k?: number;
+  wOff?: number;
+  shotType?: string;
+  zone?: string;
+}): string {
+  const { season, our, opp, k = 5, wOff = 0.7, shotType, zone } = opts;
+  const params = new URLSearchParams({
+    season,
+    our,
+    opp,
+    k: String(k),
+    w_off: String(wOff),
+  });
+  if (shotType) params.set("shot_type", shotType);
+  if (zone) params.set("zone", zone);
+  return `${API_BASE}/export/shotplan.pdf?${params.toString()}`;
+}
+
+export async function fetchShotMlAnalysis(opts?: {
+  nSplits?: number;
+  refresh?: boolean;
+}): Promise<ShotMlAnalysisResponse> {
+  const nSplits = opts?.nSplits ?? 5;
+  const params = new URLSearchParams();
+  params.set("n_splits", String(nSplits));
+  if (opts?.refresh) params.set("refresh", "true");
+  return await fetchJson<ShotMlAnalysisResponse>(
+    `${API_BASE}/analysis/shot-ml?${params.toString()}`
+  );
+}
+
+export async function fetchShotModelMetrics(
+  nSplits = 5
+): Promise<ShotModelMetricsResponse> {
+  const params = new URLSearchParams({ n_splits: String(nSplits) });
+  return await fetchJson<ShotModelMetricsResponse>(
+    `${API_BASE}/metrics/shot-models?${params.toString()}`
   );
 }

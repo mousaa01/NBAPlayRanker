@@ -24,6 +24,9 @@ export default function Nav() {
         <Link href="/data-explorer">Data Explorer</Link>
         <Link href="/matchup">Matchup (Baseline)</Link>
         <Link href="/context">Context Simulator (AI)</Link>
+        <Link href="/shot-plan">Shot Plan (Baseline)</Link>
+        <Link href="/shot-model-metrics">Shot Model Metrics</Link>
+        <Link href="/shot-statistical-analysis">Shot Statistical Analysis</Link>
         <Link href="/model-metrics">Model Performance</Link>
         <Link href="/glossary">Glossary</Link>
       </nav>
