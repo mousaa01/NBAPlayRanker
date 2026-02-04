@@ -5,11 +5,10 @@
 // (score/time) to re-rank the Top-K so it actually feels like a coach workflow.
 //
 
-
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { contextRank, fetchMetaOptions } from "../utils";
 
@@ -569,7 +568,9 @@ const PAGE_CSS = `
   }
 `;
 
-export default function ContextPage() {
+// ✅ Inner component contains useSearchParams() so Next can bail out correctly.
+// ✅ Outer export wraps it in Suspense (fixes Vercel prerender error).
+function ContextInner() {
   const params = useSearchParams();
 
   // Meta is fetched once so dropdowns have real seasons/teams.
@@ -1396,5 +1397,19 @@ export default function ContextPage() {
         </div>
       </div>
     </section>
+  );
+}
+
+export default function ContextPage() {
+  return (
+    <Suspense
+      fallback={
+        <section className="card">
+          <div style={{ padding: 16 }}>Loading…</div>
+        </section>
+      }
+    >
+      <ContextInner />
+    </Suspense>
   );
 }
