@@ -20,3 +20,6 @@ build/
 backend/data/synergy_chunks/
 
 .env.local
+# Large datasets / artifacts
+backend/data/pbp/*.parquet
+*.zip
