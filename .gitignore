@@ -18,3 +18,5 @@ build/
 
 # --- Data / intermediate files ---
 backend/data/synergy_chunks/
+
+.env.local

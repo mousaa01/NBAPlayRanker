@@ -22,12 +22,23 @@ export default function Nav() {
       <nav className="nav-links" aria-label="Primary navigation">
         <Link href="/">Home</Link>
         <Link href="/data-explorer">Data Explorer</Link>
-        <Link href="/matchup">Matchup (Baseline)</Link>
-        <Link href="/context">Context Simulator (AI)</Link>
-        <Link href="/shot-plan">Shot Plan (Baseline)</Link>
-        <Link href="/shot-model-metrics">Shot Model Metrics</Link>
-        <Link href="/shot-statistical-analysis">Shot Statistical Analysis</Link>
-        <Link href="/model-metrics">Model Performance</Link>
+        <details className="nav-dropdown">
+          <summary>Play Type Analysis</summary>
+          <div className="nav-dropdown-list">
+            <Link href="/matchup">Matchup (Baseline)</Link>
+            <Link href="/context">Context Simulator (AI)</Link>
+            <Link href="/model-metrics">Model Performance</Link>
+            <Link href="/statistical-analysis">Statistical Analysis</Link>
+          </div>
+        </details>
+        <details className="nav-dropdown">
+          <summary>Play-by-Play Analysis</summary>
+          <div className="nav-dropdown-list">
+            <Link href="/shot-plan">Shot Plan (Baseline)</Link>
+            <Link href="/shot-model-metrics">Shot Model Metrics</Link>
+            <Link href="/shot-statistical-analysis">Shot Statistical Analysis</Link>
+          </div>
+        </details>
         <Link href="/glossary">Glossary</Link>
       </nav>
     </header>

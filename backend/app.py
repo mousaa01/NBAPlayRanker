@@ -16,8 +16,22 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# ---------------------------------------------------------------------
+# IMPORTANT: make backend/ imports work no matter where uvicorn is run from
+# (e.g., repo root: uvicorn backend.app:app --reload)
+# ---------------------------------------------------------------------
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+logger = logging.getLogger("basketball_strategy")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
 
 import numpy as np
 import pandas as pd
@@ -57,6 +71,73 @@ app = FastAPI(
         "- /metrics/baseline-vs-ml: holdout evaluation (defense evidence)\n"
     ),
 )
+
+# ---------------------------------------------------------------------
+# IMPORTANT: Dataset2 router should NOT be able to break Dataset1 startup.
+# If /pbp modules have an import error, we still want play type pages working.
+# ---------------------------------------------------------------------
+try:
+    from pbp_endpoints import router as pbp_router  # type: ignore
+
+    app.include_router(pbp_router)
+    logger.info("Loaded Dataset2 (/pbp) router successfully.")
+except Exception as e:
+    logger.warning(
+        "Dataset2 (/pbp) router NOT loaded due to import error: %s. "
+        "Dataset1 playtype endpoints will still work.",
+        e,
+    )
+
+# ---------------------------------------------------------------------
+# IMPORTANT ADDITION:
+# Your frontend is calling:
+#   /pbp/shots/preview
+#   /pbp/shots.csv
+#
+# Your logs show /pbp/meta/options is working (200), but /pbp/shots/preview was 404.
+# That means your current /pbp router does NOT define the shots explorer endpoints.
+#
+# Fix (safe + non-breaking):
+# - We optionally mount a SECOND router that *only* adds the missing shots endpoints.
+# - If you haven't created backend/pbp_shots_endpoints.py yet, this block is a no-op.
+#
+# Create this file (recommended):
+#   backend/pbp_shots_endpoints.py
+# with:
+#   router = APIRouter(prefix="/pbp", tags=["pbp"])
+#   @router.get("/shots/preview") ...
+#   @router.get("/shots.csv") ...
+#
+# This keeps Dataset1 stable and avoids changing your existing pbp_endpoints.
+# ---------------------------------------------------------------------
+try:
+    from pbp_shots_endpoints import router as pbp_shots_router  # type: ignore
+
+    app.include_router(pbp_shots_router)
+    logger.info("Loaded Dataset2 (/pbp) shots explorer endpoints successfully.")
+except Exception as e:
+    logger.warning(
+        "Dataset2 (/pbp) shots explorer router NOT loaded (this is ok if you haven't created it yet): %s. "
+        "Core endpoints will still work.",
+        e,
+    )
+
+# ---------------------------------------------------------------------
+# IMPORTANT: NLP router should NOT be able to break startup either.
+# If NLP modules have an import error, core playtype + shot endpoints must still work.
+# ---------------------------------------------------------------------
+try:
+    from nlp_endpoints import router as nlp_router  # type: ignore
+
+    app.include_router(nlp_router)
+    logger.info("Loaded NLP (/nlp) router successfully.")
+except Exception as e:
+    logger.warning(
+        "NLP (/nlp) router NOT loaded due to import error: %s. "
+        "Core endpoints will still work.",
+        e,
+    )
+
 
 # Allow local dev + keep permissive for defense demo environments.
 origins = [

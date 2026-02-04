@@ -1,0 +1,143 @@
+{
+  "cached": false,
+  "computed_at_unix": 1770111814,
+  "compute_seconds": 5.835753917694092,
+  "n_splits": 5,
+  "best_model": "ridge",
+  "metrics": [
+    {
+      "model": "ridge",
+      "RMSE_mean": 0.0,
+      "RMSE_std": 0.0,
+      "MAE_mean": 0.0,
+      "MAE_std": 0.0,
+      "R2_mean": 1.0,
+      "R2_std": 0.0
+    },
+    {
+      "model": "gbr",
+      "RMSE_mean": 0.0,
+      "RMSE_std": 0.0,
+      "MAE_mean": 0.0,
+      "MAE_std": 0.0,
+      "R2_mean": 1.0,
+      "R2_std": 0.0
+    },
+    {
+      "model": "rf",
+      "RMSE_mean": 0.0,
+      "RMSE_std": 0.0,
+      "MAE_mean": 0.0,
+      "MAE_std": 0.0,
+      "R2_mean": 1.0,
+      "R2_std": 0.0
+    }
+  ],
+  "fold_summary": [
+    {
+      "model": "ridge",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 1.0
+    },
+    {
+      "model": "gbr",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 1.0
+    },
+    {
+      "model": "rf",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 1.0
+    },
+    {
+      "model": "ridge",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 2.0
+    },
+    {
+      "model": "gbr",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 2.0
+    },
+    {
+      "model": "rf",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 2.0
+    },
+    {
+      "model": "ridge",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 3.0
+    },
+    {
+      "model": "gbr",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 3.0
+    },
+    {
+      "model": "rf",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 3.0
+    },
+    {
+      "model": "ridge",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 4.0
+    },
+    {
+      "model": "gbr",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 4.0
+    },
+    {
+      "model": "rf",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 4.0
+    },
+    {
+      "model": "ridge",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 5.0
+    },
+    {
+      "model": "gbr",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 5.0
+    },
+    {
+      "model": "rf",
+      "RMSE": 0.0,
+      "MAE": 0.0,
+      "R2": 1.0,
+      "fold": 5.0
+    }
+  ]
+}

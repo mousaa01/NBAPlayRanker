@@ -1,0 +1,11 @@
+{
+  "agg_parquet": "/Users/gurkasahan/Downloads/bgs-pspi 2/backend/data/pbp/shots_agg.parquet",
+  "fingerprint": {
+    "schema_version": "agg_v1",
+    "source_mtime_ns": 1770111729033430299,
+    "source_path": "/Users/gurkasahan/Downloads/bgs-pspi 2/backend/data/pbp/shots_clean.parquet",
+    "source_size": 12430637
+  },
+  "league_parquet": "/Users/gurkasahan/Downloads/bgs-pspi 2/backend/data/pbp/shots_agg_league.parquet",
+  "notes": "Aggregates derived from shots_clean.parquet (shot_aggregates.py)."
+}
