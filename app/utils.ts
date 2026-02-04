@@ -419,6 +419,7 @@ export function getTeamPlaytypesCsvUrl(opts: {
   side?: string;
   playType?: string;
   minPoss?: number;
+  limit?: number; //
 }): string {
   const { season, team, side, playType, minPoss = 0 } = opts;
 
@@ -428,6 +429,7 @@ export function getTeamPlaytypesCsvUrl(opts: {
   if (side) params.set("side", side);
   if (playType) params.set("play_type", playType);
   params.set("min_poss", String(minPoss));
+
 
   return `${API_BASE}/data/team-playtypes.csv?${params.toString()}`;
 }
