@@ -287,7 +287,7 @@ export default function DataExplorerPage() {
       side: side || undefined,
       playType: playType || undefined,
       minPoss,
-      limit: Math.max(limit, 1000),
+      //limit: Math.max(limit, 1000),
     });
   }, [season, team, side, playType, minPoss, limit]);
 
