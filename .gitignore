@@ -23,3 +23,7 @@ backend/data/synergy_chunks/
 # Large datasets / artifacts
 backend/data/pbp/*.parquet
 *.zip
+
+# Large datasets / artifacts
+backend/data/pbp/*.parquet
+*.zip
