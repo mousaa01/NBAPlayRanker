@@ -17,16 +17,16 @@ export default function NavBar() {
   const [menuOpen, setMenuOpen] = useState<MenuKey>(null);
   void menuOpen; // kept so structure doesn't shift later when you re-enable RBAC menus
 
-  // Primary links (ONLY what you asked for)
+  // Primary links
   const topHome: NavItem = useMemo(() => ({ href: "/", label: "Home" }), []);
   const dataExplorer: NavItem = useMemo(() => ({ href: "/data-explorer", label: "Data Explorer" }), []);
   const matchupBaseline: NavItem = useMemo(() => ({ href: "/matchup", label: "Matchup / Baseline" }), []);
   const contextML: NavItem = useMemo(() => ({ href: "/context", label: "Context / ML" }), []);
+  const modelPerformance: NavItem = useMemo(() => ({ href: "/model-metrics", label: "Model Performance" }), []);
   const gamePlan: NavItem = useMemo(() => ({ href: "/gameplan", label: "Gameplan" }), []);
   const glossary: NavItem = useMemo(() => ({ href: "/glossary", label: "Glossary" }), []);
 
   // ✅ Future pages (commented for RBAC later)
-  // const modelPerformance: NavItem = useMemo(() => ({ href: "/model-metrics", label: "Model Performance" }), []);
   // const statisticalAnalysis: NavItem = useMemo(() => ({ href: "/statistical-analysis", label: "Statistical Analysis" }), []);
   // const shotPlan: NavItem = useMemo(() => ({ href: "/shot-plan", label: "Shot Plan" }), []);
   // const shotExplorer: NavItem = useMemo(() => ({ href: "/shot-explorer", label: "Shot Explorer" }), []);
@@ -141,18 +141,18 @@ export default function NavBar() {
           </div>
         </div>
 
-        {/* Desktop nav (ONLY requested links) */}
+        {/* Desktop nav */}
         <nav className="npr-nav" aria-label="Primary navigation">
           <NavLink item={topHome} className="npr-link" />
           <NavLink item={dataExplorer} className="npr-link" />
           <NavLink item={matchupBaseline} className="npr-link" />
           <NavLink item={contextML} className="npr-link" />
+          <NavLink item={modelPerformance} className="npr-link" />
           <NavLink item={gamePlan} className="npr-link" cta />
           <NavLink item={glossary} className="npr-link" />
 
           {/* Future pages (RBAC) */}
           {/*
-          <NavLink item={modelPerformance} className="npr-link" />
           <NavLink item={statisticalAnalysis} className="npr-link" />
           <NavLink item={shotPlan} className="npr-link" />
           <NavLink item={shotExplorer} className="npr-link" />
@@ -184,12 +184,12 @@ export default function NavBar() {
         <NavLink item={dataExplorer} className="npr-mobile-link" block />
         <NavLink item={matchupBaseline} className="npr-mobile-link" block />
         <NavLink item={contextML} className="npr-mobile-link" block />
+        <NavLink item={modelPerformance} className="npr-mobile-link" block />
         <NavLink item={gamePlan} className="npr-mobile-link npr-cta-mobile" block cta />
         <NavLink item={glossary} className="npr-mobile-link" block />
 
         {/* Future pages (RBAC) */}
         {/*
-        <NavLink item={modelPerformance} className="npr-mobile-link" block />
         <NavLink item={statisticalAnalysis} className="npr-mobile-link" block />
         <NavLink item={shotPlan} className="npr-mobile-link" block />
         <NavLink item={shotExplorer} className="npr-mobile-link" block />
