@@ -955,21 +955,6 @@ function pillStyle(active: boolean): CSSProperties {
   };
 }
 
-function linkPillStyle(): CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "7px 10px",
-    borderRadius: 999,
-    border: "1px solid rgba(15, 23, 42, 0.10)",
-    background: "rgba(255,255,255,0.55)",
-    fontSize: 12,
-    textDecoration: "none",
-    color: "inherit",
-  };
-}
-
 export default function GlossaryPage() {
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState<string>("All");
@@ -1027,28 +1012,12 @@ export default function GlossaryPage() {
               Glossary
             </h1>
             <p className="muted" style={{ marginTop: 6, fontSize: 14, marginBottom: 0 }}>
-              Plain-English definitions for terms used across the entire product (Dataset1 + Dataset2 + Gameplan). Built
-              for fast committee review and easy traceability.
+              Plain-English definitions for terms used across the entire product built for fast review and easy traceability.
             </p>
           </div>
-
-          
         </div>
 
-        {/* Product map quick links */}
-        <div style={{ marginTop: 12 }}>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-            Product map (quick jump):
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {PRODUCT_LINKS.map((l) => (
-              <Link key={l.href} href={l.href} style={linkPillStyle()}>
-                {l.label}
-              </Link>
-            ))}
-          </div>
-        </div>
-
+        {/* ✅ Keep only: Search bar + counters + tag pills (no Product map) */}
         <div
           style={{
             marginTop: 14,
