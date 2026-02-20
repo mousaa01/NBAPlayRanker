@@ -1,15 +1,13 @@
 // app/matchup/page.tsx
 //
-// This is the “Baseline Matchup Console” — the explainable version of the recommender.
-// The whole point is trust + clarity: you pick a season + matchup, and it ranks the best play types
-// using the baseline formula (shrunk offense PPP + shrunk opponent allowed PPP).
+// Baseline Matchup Console (Coach-friendly)
 //
-// Why this page matters (for product + defense):
-// - This is my “trust anchor” page. Everything is transparent, repeatable, and easy to explain.
-// - It shows Top-K ranked play types + the rationale + (optional) raw math fields.
-// - It also attaches real visuals (SportyPy court map) + exports (CSV + 1-page PDF) so it feels like a finished product.
+// UI goals (per your wireframes):
+// - Simple “inputs → run → top-K results” flow.
+// - Keep the app feeling finished + coach-friendly.
+// - Hide *all* explanations / formulas / definitions in a “More info” dropdown at the bottom.
+// - Maintain ALL existing functionality (same API calls, exports, viz generation, etc.)
 //
-
 
 "use client";
 
@@ -56,34 +54,34 @@ type VizResponse = {
   image_base64: string;
 };
 
-// Number formatting helpers so the UI stays clean + consistent.
+// ===== Formatting helpers =====
 function fmt(n: any, digits = 3) {
   const x = Number(n);
   if (!Number.isFinite(x)) return "—";
   return x.toFixed(digits);
 }
-
 function fmtInt(n: any) {
   const x = Number(n);
   if (!Number.isFinite(x)) return "—";
   return String(Math.round(x));
 }
-
-// Used for the little bar chart so widths don’t blow up.
 function clamp01(x: number) {
   return Math.max(0, Math.min(1, x));
 }
+function safePct(x: any) {
+  const v = Number(x);
+  if (!Number.isFinite(v)) return "—";
+  return `${(v * 100).toFixed(1)}%`;
+}
 
-// Defaults just make the page “feel ready” on load (so you don’t land on an empty screen).
+// Defaults make the page feel “ready” on load
 function pickDefaultSeason(seasons: string[]) {
   return seasons.length ? seasons[seasons.length - 1] : "";
 }
-
 function pickDefaultOur(teams: string[]) {
   if (teams.includes("TOR")) return "TOR";
   return teams[0] ?? "";
 }
-
 function pickDefaultOpp(teams: string[], our: string) {
   const preferred = ["BOS", "LAL", "DEN", "MIA", "GSW"];
   for (const t of preferred) {
@@ -92,14 +90,7 @@ function pickDefaultOpp(teams: string[], our: string) {
   return teams.find((t) => t !== our) ?? "";
 }
 
-function safePct(x: any) {
-  const v = Number(x);
-  if (!Number.isFinite(v)) return "—";
-  return `${(v * 100).toFixed(1)}%`;
-}
-
-// I normalize weights so the model is always interpretable (w_off + w_def = 1).
-// This prevents weird results if someone types random values and forgets to balance them.
+// Normalize weights so interpretation stays stable (w_off + w_def = 1)
 function normalizeWeights(wOff: number, wDef: number) {
   const a = Number(wOff);
   const b = Number(wDef);
@@ -108,32 +99,20 @@ function normalizeWeights(wOff: number, wDef: number) {
   return { wOff: a / sum, wDef: b / sum };
 }
 
-function Icon({ name }: { name: "play" | "spark" | "download" | "map" | "pdf" | "info" }) {
-  // Lightweight inline SVG icons so we don’t add any UI dependencies.
-  const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", xmlns: "http://www.w3.org/2000/svg" };
+function Icon({ name }: { name: "play" | "download" | "map" | "pdf" | "info" }) {
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    xmlns: "http://www.w3.org/2000/svg",
+  };
   switch (name) {
     case "play":
       return (
         <svg {...common}>
           <path d="M10 8.5v7l6-3.5-6-3.5Z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
           <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" stroke="currentColor" strokeWidth="2" />
-        </svg>
-      );
-    case "spark":
-      return (
-        <svg {...common}>
-          <path
-            d="M12 2l1.2 4.2L17.4 7.4l-4.2 1.2L12 12.8l-1.2-4.2L6.6 7.4l4.2-1.2L12 2Z"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M19 12l.7 2.4 2.3.6-2.3.6L19 18l-.7-2.4-2.3-.6 2.3-.6L19 12Z"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinejoin="round"
-          />
         </svg>
       );
     case "download":
@@ -160,12 +139,7 @@ function Icon({ name }: { name: "play" | "spark" | "download" | "map" | "pdf" | 
     case "pdf":
       return (
         <svg {...common}>
-          <path
-            d="M7 3h7l3 3v15H7V3Z"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinejoin="round"
-          />
+          <path d="M7 3h7l3 3v15H7V3Z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
           <path d="M14 3v4h4" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
           <path d="M9 14h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           <path d="M9 17h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -183,7 +157,7 @@ function Icon({ name }: { name: "play" | "spark" | "download" | "map" | "pdf" | 
 }
 
 export default function MatchupPage() {
-  // Meta drives dropdowns (seasons/teams). Also includes friendly team names when available.
+  // Meta drives dropdowns (seasons/teams)
   const [meta, setMeta] = useState<MetaOptions>({
     seasons: [],
     teams: [],
@@ -193,37 +167,36 @@ export default function MatchupPage() {
     hasMlPredictions: false,
   });
 
-  // BaselineInfo is “explainability text”: formula, defaults, definitions, shrinkage explanation.
+  // Explainability text (moved into “More info”)
   const [baselineInfo, setBaselineInfo] = useState<BaselineInfo | null>(null);
 
-  // Matchup inputs (these are what we send to the baseline endpoint).
+  // Inputs
   const [season, setSeason] = useState("");
   const [our, setOur] = useState("");
   const [opp, setOpp] = useState("");
   const [k, setK] = useState(5);
 
-  // User-adjustable weights (I normalize them before sending so interpretation stays stable).
+  // Weights
   const [wOff, setWOff] = useState(0.7);
   const [wDef, setWDef] = useState(0.3);
 
-  // Baseline results table (Top-K rows).
+  // Results
   const [rows, setRows] = useState<BaselineRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Toggle to show/hide the raw math fields in the table.
+  // Optional: raw math fields (kept, but hidden behind a “details” toggle)
   const [showMath, setShowMath] = useState(false);
 
-  // Visualization state: SportyPy returns caption + base64 image for the selected play type.
+  // Viz state
   const [vizPlayType, setVizPlayType] = useState<string>("");
   const [viz, setViz] = useState<VizResponse | null>(null);
   const [vizLoading, setVizLoading] = useState(false);
   const [vizError, setVizError] = useState<string | null>(null);
 
-  // This prevents the initial “auto-run” from firing multiple times due to re-renders.
   const didAutoRunRef = useRef(false);
 
-  // On first load: pull meta + baseline info, set smart defaults so the page starts “ready”.
+  // Init meta + defaults
   useEffect(() => {
     let cancelled = false;
 
@@ -247,7 +220,6 @@ export default function MatchupPage() {
         if (cancelled) return;
         setBaselineInfo(b);
 
-        // If backend publishes default weights, I respect them here.
         if (b?.defaults?.w_off != null) setWOff(Number(b.defaults.w_off));
         if (b?.defaults?.w_def != null) setWDef(Number(b.defaults.w_def));
       } catch (e: any) {
@@ -262,20 +234,13 @@ export default function MatchupPage() {
     };
   }, []);
 
-  // Meta is “ready” once seasons + teams exist (then dropdowns are valid).
-  const metaReady = useMemo(() => (meta?.seasons?.length ?? 0) > 0 && (meta?.teams?.length ?? 0) > 0, [meta]);
+  const metaReady = useMemo(
+    () => (meta?.seasons?.length ?? 0) > 0 && (meta?.teams?.length ?? 0) > 0,
+    [meta]
+  );
 
-  // Weight UX: show whether user entered weights sum to ~1 (even though we normalize anyway).
-  const weightsSum = useMemo(() => Number(wOff) + Number(wDef), [wOff, wDef]);
-  const weightsWarn = useMemo(() => {
-    if (!Number.isFinite(weightsSum)) return true;
-    return Math.abs(weightsSum - 1) > 0.01;
-  }, [weightsSum]);
-
-  // This is what we actually use when calling the API (always sums to 1).
   const norm = useMemo(() => normalizeWeights(wOff, wDef), [wOff, wDef]);
 
-  // Basic run guard: no missing fields and no “team plays itself” matchup.
   const canRun = useMemo(() => {
     if (!metaReady) return false;
     if (!season || !our || !opp) return false;
@@ -283,42 +248,31 @@ export default function MatchupPage() {
     return true;
   }, [metaReady, season, our, opp]);
 
-  // CSV link is just a URL builder — it uses the exact same selections as the page.
   const csvUrl = useMemo(() => {
     if (!season || !our || !opp) return "#";
     return getBaselineCsvUrl({ season, our, opp, k, wOff: norm.wOff, wDef: norm.wDef });
   }, [season, our, opp, k, norm.wOff, norm.wDef]);
 
-  // Friendly labels help the UI feel more polished (abbr + full team name).
-  const ourLabel = useMemo(() => {
-    const name = meta.teamNames?.[our];
-    return name ? `${our} (${name})` : our;
-  }, [meta.teamNames, our]);
-
-  const oppLabel = useMemo(() => {
-    const name = meta.teamNames?.[opp];
-    return name ? `${opp} (${name})` : opp;
-  }, [meta.teamNames, opp]);
-
-  // Link into the Context page using the same matchup params (smooth flow for users).
   const runContextHref = useMemo(() => {
-    const qs = new URLSearchParams({
-      season,
-      our,
-      opp,
-      k: String(k),
-    });
+    const qs = new URLSearchParams({ season, our, opp, k: String(k) });
     return `/context?${qs.toString()}`;
   }, [season, our, opp, k]);
 
-  // If the matchup changes, the old viz becomes invalid, so I reset it.
+  const matchupLabel = useMemo(() => {
+    const ourName = meta.teamNames?.[our];
+    const oppName = meta.teamNames?.[opp];
+    const left = ourName ? `${our} (${ourName})` : our;
+    const right = oppName ? `${opp} (${oppName})` : opp;
+    return `${left} vs ${right}`;
+  }, [meta.teamNames, our, opp]);
+
+  // Reset viz when matchup changes
   useEffect(() => {
     setViz(null);
     setVizError(null);
     setVizPlayType("");
   }, [season, our, opp, k, wOff, wDef]);
 
-  // PDF export link for a specific play type (1-page “coach handout” style export).
   function getPdfUrlForPlayType(playType: string) {
     if (!season || !our || !opp || !playType) return "#";
     const params = new URLSearchParams({
@@ -332,10 +286,6 @@ export default function MatchupPage() {
     return `${API_BASE}/export/playtype-viz.pdf?${params.toString()}`;
   }
 
-  // Main baseline run:
-  // - Clears old rows
-  // - Calls baselineRank endpoint
-  // - Stores Top-K rows for bars + table
   async function runBaseline() {
     if (!season || !our || !opp) {
       setError("Please select a season, our team, and an opponent.");
@@ -370,10 +320,6 @@ export default function MatchupPage() {
     }
   }
 
-  // Court visualization run:
-  // - Uses selected play type
-  // - Calls SportyPy viz endpoint
-  // - Returns caption + base64 image so it can render instantly in the UI
   async function runViz(playTypeOverride?: string) {
     const pt = (playTypeOverride ?? vizPlayType)?.trim();
     if (!pt) {
@@ -408,7 +354,7 @@ export default function MatchupPage() {
     }
   }
 
-  // Auto-run once when defaults are loaded so the page doesn’t feel empty on first visit.
+  // Auto-run once when defaults are loaded
   useEffect(() => {
     if (!metaReady) return;
     if (!season || !our || !opp) return;
@@ -420,566 +366,667 @@ export default function MatchupPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metaReady, season, our, opp]);
 
-  // Best row is used for the “#1 play type” highlight card (top of results).
-  const bestRow = useMemo(() => {
-    if (!rows.length) return null;
-    const valid = rows.filter((r) => Number.isFinite(Number(r.pppPred)));
-    if (!valid.length) return null;
-    return valid[0];
-  }, [rows]);
+  const bestRow = useMemo(() => (rows.length ? rows[0] : null), [rows]);
 
-  // Convenience: default the viz dropdown to the #1 play type so the user can generate a map fast.
+  // Default viz play type to #1
   useEffect(() => {
     if (!rows.length) return;
     if (vizPlayType) return;
     if (bestRow?.playType) setVizPlayType(bestRow.playType);
   }, [rows, bestRow, vizPlayType]);
 
-  // Guard for the viz button (must have matchup + play type selected).
   const vizReady = useMemo(() => Boolean(season && our && opp && vizPlayType), [season, our, opp, vizPlayType]);
 
   return (
-    <section className="card pageRoot">
-      {/* Page-only CSS so I can polish this UI without touching global styles */}
-      <style>{`
-        /*
-          Prevent page-level horizontal scrolling.
-          The wide, nowrap table below should scroll INSIDE its own wrapper
-          (tableWrap), not force the entire page to overflow.
-        */
-        .pageRoot { max-width: 100%; overflow-x: hidden; }
+    <section className="pageRoot">
+      <style jsx>{`
+        .pageRoot {
+          max-width: 1100px;
+          margin: 0 auto;
+          padding: 18px 16px 34px;
+        }
 
-        .topBar {
+        .hero {
+          display: grid;
+          gap: 6px;
+          margin-bottom: 12px;
+        }
+
+        .heroTop {
           display: flex;
+          align-items: center;
           justify-content: space-between;
           gap: 12px;
           flex-wrap: wrap;
-          align-items: flex-start;
         }
-        .titleBlock { display: grid; gap: 6px; }
-        .crumbs { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-        .pillMini {
+
+        .badge {
           display: inline-flex;
           align-items: center;
           gap: 8px;
           padding: 6px 10px;
           border-radius: 999px;
-          border: 1px solid rgba(15,23,42,0.10);
-          background: rgba(15,23,42,0.03);
-          color: rgba(15,23,42,0.72);
+          border: 1px solid rgba(15, 23, 42, 0.1);
+          background: rgba(15, 23, 42, 0.03);
+          color: rgba(15, 23, 42, 0.75);
           font-size: 12px;
           white-space: nowrap;
         }
-        .layout {
+
+        h1 {
+          margin: 0;
+          font-size: 22px;
+          letter-spacing: -0.3px;
+        }
+
+        .sub {
+          margin: 0;
+          color: rgba(15, 23, 42, 0.7);
+          font-size: 13px;
+          line-height: 1.45;
+        }
+
+        .card {
+          border-radius: 16px;
+          border: 1px solid rgba(15, 23, 42, 0.1);
+          background: rgba(255, 255, 255, 0.78);
+          padding: 14px;
+        }
+
+        .grid2 {
           display: grid;
           grid-template-columns: 1fr;
-          gap: 14px;
-          margin-top: 12px;
-          max-width: 100%;
+          gap: 12px;
         }
-        .layout > * { min-width: 0; }
-        @media (min-width: 1060px) {
-          .layout { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); align-items: start; }
-          .stickyRight { position: sticky; top: 12px; }
+        @media (min-width: 860px) {
+          .grid2 {
+            grid-template-columns: 1.05fr 0.95fr;
+            align-items: start;
+          }
         }
-        .panelTitle {
+
+        .sectionTitle {
           display: flex;
-          justify-content: space-between;
           align-items: center;
+          justify-content: space-between;
           gap: 10px;
           flex-wrap: wrap;
+          margin-bottom: 10px;
         }
-        .subtleCard {
-          border-radius: 16px;
-          border: 1px solid rgba(15,23,42,0.08);
-          background: rgba(255,255,255,0.72);
-          padding: 12px;
-          max-width: 100%;
+        .sectionTitle h2 {
+          margin: 0;
+          font-size: 14px;
+          letter-spacing: -0.2px;
         }
-        .divider {
-          height: 1px;
-          background: rgba(15,23,42,0.08);
-          margin: 12px 0;
-        }
-        .weightRow {
+
+        .inputs {
           display: grid;
           grid-template-columns: 1fr;
           gap: 10px;
+        }
+        @media (min-width: 640px) {
+          .inputs {
+            grid-template-columns: 1fr 1fr;
+          }
+        }
+
+        label {
+          display: grid;
+          gap: 6px;
+          font-size: 12px;
+          color: rgba(15, 23, 42, 0.8);
+        }
+
+        .input {
+          width: 100%;
+          border-radius: 12px;
+          border: 1px solid rgba(15, 23, 42, 0.12);
+          background: rgba(255, 255, 255, 0.95);
+          padding: 10px 10px;
+          font-size: 13px;
+          color: rgba(15, 23, 42, 0.92);
+          outline: none;
+        }
+
+        .row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          margin-top: 12px;
+          padding-top: 12px;
+          border-top: 1px solid rgba(15, 23, 42, 0.08);
+        }
+
+        .btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 12px;
+          border-radius: 999px;
+          border: 1px solid rgba(15, 23, 42, 0.14);
+          background: rgba(255, 255, 255, 0.9);
+          color: rgba(15, 23, 42, 0.92);
+          font-weight: 800;
+          font-size: 13px;
+          text-decoration: none;
+          cursor: pointer;
+        }
+
+        .btnPrimary {
+          border: 1px solid rgba(255, 255, 255, 0.26);
+          background: linear-gradient(135deg, #2563eb 0%, #7c3aed 55%, #ec4899 100%);
+          color: #fff;
+          box-shadow: 0 16px 34px rgba(37, 99, 235, 0.22);
+          text-shadow: 0 1px 0 rgba(0, 0, 0, 0.14);
+        }
+
+        .btn:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .muted {
+          color: rgba(15, 23, 42, 0.68);
+          font-size: 12px;
+          margin: 0;
+        }
+
+        .error {
           margin-top: 10px;
+          font-size: 12px;
+          color: rgba(185, 28, 28, 0.92);
         }
-        @media (min-width: 760px) {
-          .weightRow { grid-template-columns: 1fr 1fr; }
+
+        .weightsWrap {
+          display: grid;
+          gap: 10px;
+          margin-top: 12px;
         }
+
         .weightBox {
-          border: 1px solid rgba(15,23,42,0.08);
-          background: rgba(15,23,42,0.02);
+          border: 1px solid rgba(15, 23, 42, 0.1);
+          background: rgba(15, 23, 42, 0.02);
           border-radius: 14px;
           padding: 10px;
           display: grid;
           gap: 8px;
         }
+
         .weightTop {
           display: flex;
+          align-items: center;
           justify-content: space-between;
           gap: 10px;
-          align-items: center;
           flex-wrap: wrap;
         }
+
         .range {
           width: 100%;
-          max-width: 100%;
         }
+
+        .resultsCard {
+          margin-top: 12px;
+        }
+
+        .topRec {
+          border: 1px solid rgba(15, 23, 42, 0.1);
+          border-radius: 14px;
+          padding: 12px;
+          background: rgba(255, 255, 255, 0.9);
+        }
+
+        .topRecTitle {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .playName {
+          font-weight: 900;
+          font-size: 15px;
+          letter-spacing: -0.2px;
+        }
+
+        .barList {
+          display: grid;
+          gap: 10px;
+          margin-top: 12px;
+        }
+
+        .barRow {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        @media (min-width: 720px) {
+          .barRow {
+            grid-template-columns: 240px 1fr 80px;
+            align-items: center;
+            gap: 10px;
+          }
+        }
+
+        .barLabel {
+          display: grid;
+          gap: 2px;
+        }
+
         .meter {
           height: 10px;
           border-radius: 999px;
-          background: rgba(15,23,42,0.08);
+          background: rgba(15, 23, 42, 0.1);
           overflow: hidden;
         }
+
         .meter > div {
           height: 100%;
           background: rgba(15, 23, 42, 0.35);
         }
-        .actionDock {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          align-items: center;
-          justify-content: space-between;
-          margin-top: 12px;
+
+        .mono {
+          font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+          font-size: 12px;
+        }
+
+        details.moreInfo {
+          margin-top: 14px;
+          border-top: 1px solid rgba(15, 23, 42, 0.08);
           padding-top: 12px;
-          border-top: 1px solid rgba(15,23,42,0.08);
         }
-        .actionLeft, .actionRight { display: flex; gap: 10px; flex-wrap: wrap; }
-        .btnIcon {
-          display: inline-flex;
-          gap: 8px;
-          align-items: center;
+        details.moreInfo summary {
+          cursor: pointer;
+          font-weight: 900;
+          color: rgba(15, 23, 42, 0.9);
+          list-style: none;
         }
+        details.moreInfo summary::-webkit-details-marker {
+          display: none;
+        }
+
         .tableWrap {
           overflow-x: auto;
-          display: block;
-          max-width: 100%;
           border-radius: 14px;
-          border: 1px solid rgba(15,23,42,0.08);
-          background: rgba(255,255,255,0.70);
+          border: 1px solid rgba(15, 23, 42, 0.1);
+          background: rgba(255, 255, 255, 0.86);
+          margin-top: 10px;
         }
-        /* Let the table be as wide as it needs, but keep that scroll contained in tableWrap */
-        .tableWrap .table { margin: 0; width: max-content; min-width: 100%; }
+
+        table {
+          width: max-content;
+          min-width: 100%;
+          border-collapse: collapse;
+        }
+
+        th,
+        td {
+          padding: 10px 10px;
+          border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+          text-align: left;
+          font-size: 12px;
+          white-space: nowrap;
+        }
+
+        th {
+          font-weight: 900;
+          color: rgba(15, 23, 42, 0.82);
+          background: rgba(15, 23, 42, 0.02);
+        }
+
         .imgFrame {
           width: 100%;
-          max-width: 100%;
           overflow: hidden;
           border-radius: 14px;
-          border: 1px solid rgba(15,23,42,0.12);
-          background: rgba(15,23,42,0.02);
+          border: 1px solid rgba(15, 23, 42, 0.12);
+          background: rgba(15, 23, 42, 0.02);
+          margin-top: 10px;
         }
-        .imgFrame img { width: 100%; height: auto; display: block; }
+        .imgFrame img {
+          width: 100%;
+          height: auto;
+          display: block;
+        }
       `}</style>
 
-      {/* Top navigation + quick jumps to the rest of the product */}
-      <div className="topBar">
-        <div className="titleBlock">
-          <div className="crumbs">
-            <Link className="btn" href="/">
-              Home
-            </Link>
-            <span className="pillMini">
-              <Icon name="info" /> Baseline • Explainable
-            </span>
-            {meta?._fallback ? <span className="pillMini">Fallback meta</span> : null}
-            {weightsWarn ? <span className="pillMini">Weights auto-normalized</span> : <span className="pillMini">Weights OK</span>}
+      {/* Header */}
+      <div className="hero">
+        <div className="heroTop">
+          <div className="badge">
+            <Icon name="info" /> Baseline • Coach view
           </div>
-
-          <h1 className="h1" style={{ margin: 0 }}>
-            Matchup Console (Baseline)
-          </h1>
-
-          <p className="muted" style={{ margin: 0 }}>
-            Transparent ranking of play types for a matchup. Use this as the <strong>trust anchor</strong>, then compare
-            to the AI Context Simulator for scenario-based adjustments.
-          </p>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Link className="btn" href="/data-explorer">
+              Data Explorer
+            </Link>
+            <Link className="btn" href={runContextHref}>
+              Next: Context / ML
+            </Link>
+          </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <Link className="btn" href="/gameplan">
-            <span className="btnIcon">
-              <Icon name="spark" /> Gameplan
-            </span>
-          </Link>
-          <Link className="btn" href={runContextHref}>
-            <span className="btnIcon">
-              <Icon name="spark" /> AI Context
-            </span>
-          </Link>
-          <Link className="btn" href="/shot-plan">
-            Shot Plan
-          </Link>
-          <Link className="btn" href="/shot-heatmap">
-            Shot Heatmap
-          </Link>
-        </div>
+        <h1>Matchup / Baseline</h1>
+        <p className="sub">
+          Pick a matchup and get the Top-K play types. This is the transparent “trust anchor” before Context / ML.
+        </p>
       </div>
 
-      {/* Two-column layout: left = controls/results, right = visualization panel */}
-      <div className="layout">
-        {/* LEFT: explanation + inputs + baseline results */}
-        <div>
-          {/* “Explain it like I’m presenting it” section (formula + shrinkage reasoning) */}
-          <div className="subtleCard">
-            <div className="panelTitle">
-              <h2 style={{ margin: 0, fontSize: 16 }}>How the baseline works</h2>
-              <button className="btn" type="button" onClick={() => setShowMath((v) => v)}>
-                {showMath ? "Math is ON" : "Math is OFF"}
-              </button>
-            </div>
+      {/* Inputs + Run */}
+      <div className="card">
+        <div className="sectionTitle">
+          <h2>Matchup + context inputs</h2>
+          <span className="badge">{metaReady ? "Ready" : "Loading…"}</span>
+        </div>
 
-            <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
-              <code>
-                {baselineInfo?.formula ?? "PPP_PRED = w_off * PPP_OFF_SHRUNK + w_def * PPP_DEF_SHRUNK"}
-              </code>
-            </p>
+        <div className="inputs">
+          <label>
+            Season
+            <select className="input" value={season} onChange={(e) => setSeason(e.target.value)}>
+              {(meta.seasons ?? []).map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
 
-            {baselineInfo?.whyShrinkage ? (
-              <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
-                <strong>Why shrinkage?</strong> {baselineInfo.whyShrinkage}
-              </p>
-            ) : (
-              <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
-                <strong>Why shrinkage?</strong> It reduces small-sample noise so play types with few possessions don’t
-                look unrealistically good or bad.
-              </p>
-            )}
+          <label>
+            Top-K
+            <select className="input" value={k} onChange={(e) => setK(Number(e.target.value))}>
+              {[3, 5, 7, 10].map((x) => (
+                <option key={x} value={x}>
+                  {x}
+                </option>
+              ))}
+            </select>
+          </label>
 
-            <details style={{ marginTop: 10 }}>
-              <summary style={{ cursor: "pointer", fontSize: 13 }}>
-                What happens in the backend when you run this?
-              </summary>
-              <ul className="muted" style={{ fontSize: 13, paddingLeft: 18, marginTop: 10, lineHeight: 1.6 }}>
-                <li>Frontend sends: season, our team, opponent, k, and weights.</li>
-                <li>Backend computes shrunk offense PPP (our) by play type.</li>
-                <li>Backend computes shrunk defense-allowed PPP (opponent) by play type.</li>
-                <li>Baseline prediction applies the weighted blend and sorts descending.</li>
-                <li>Response includes Top-K rows + rationale + raw math fields (optional).</li>
-              </ul>
-            </details>
+          <label>
+            Our Team
+            <select className="input" value={our} onChange={(e) => setOur(e.target.value)}>
+              {(meta.teams ?? []).map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
 
-            {baselineInfo?.definitions ? (
-              <details style={{ marginTop: 10 }}>
-                <summary style={{ cursor: "pointer", fontSize: 13 }}>Show definitions</summary>
-                <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                  {Object.entries(baselineInfo.definitions).map(([kk, vv]) => (
-                    <div key={kk} className="muted" style={{ fontSize: 13 }}>
-                      <span style={{ fontFamily: "var(--mono)" }}>{kk}</span>: {vv}
-                    </div>
-                  ))}
-                </div>
-              </details>
-            ) : null}
+          <label>
+            Opponent
+            <select className="input" value={opp} onChange={(e) => setOpp(e.target.value)}>
+              {(meta.teams ?? []).map((t) => (
+                <option key={t} value={t} disabled={t === our}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="weightsWrap">
+          <div className="sectionTitle" style={{ marginBottom: 0 }}>
+            <h2>Weights (auto-normalized)</h2>
+            <span className="badge">
+              off={fmt(norm.wOff, 2)} • def={fmt(norm.wDef, 2)}
+            </span>
           </div>
 
-          {/* Inputs section: matchup + Top-K + weights */}
-          <div className="subtleCard" style={{ marginTop: 12 }}>
-            <div className="panelTitle">
-              <h2 style={{ margin: 0, fontSize: 16 }}>Matchup inputs</h2>
-              <span className="pillMini">{metaReady ? "Ready" : "Loading meta…"}</span>
-            </div>
-
-            <form className="form-grid" onSubmit={(e) => e.preventDefault()} style={{ marginTop: 10 }}>
-              <label>
-                Season
-                <select className="input" value={season} onChange={(e) => setSeason(e.target.value)}>
-                  {(meta.seasons ?? []).map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Our Team
-                <select className="input" value={our} onChange={(e) => setOur(e.target.value)}>
-                  {(meta.teams ?? []).map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Opponent
-                <select className="input" value={opp} onChange={(e) => setOpp(e.target.value)}>
-                  {(meta.teams ?? []).map((t) => (
-                    <option key={t} value={t} disabled={t === our}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Top-K
-                <select className="input" value={k} onChange={(e) => setK(Number(e.target.value))}>
-                  {[3, 5, 7, 10].map((x) => (
-                    <option key={x} value={x}>
-                      {x}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </form>
-
-            <div className="divider" />
-
-            <div className="panelTitle">
-              <h2 style={{ margin: 0, fontSize: 16 }}>Weights (auto-normalized)</h2>
-              <span className="pillMini">
-                off={fmt(norm.wOff, 2)} • def={fmt(norm.wDef, 2)}
-              </span>
-            </div>
-
-            <div className="weightRow">
-              <div className="weightBox">
-                <div className="weightTop">
-                  <div>
-                    <strong style={{ fontSize: 13 }}>Offense weight</strong>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      w_off (input): {fmt(wOff, 2)} → normalized: {fmt(norm.wOff, 2)}
-                    </div>
-                  </div>
-                  <input
-                    className="input"
-                    style={{ width: 90 }}
-                    type="number"
-                    step="0.05"
-                    min={0}
-                    max={1}
-                    value={wOff}
-                    onChange={(e) => setWOff(Number(e.target.value))}
-                  />
+          <div className="grid2">
+            <div className="weightBox">
+              <div className="weightTop">
+                <div>
+                  <div style={{ fontWeight: 900, fontSize: 12 }}>Offense weight</div>
+                  <p className="muted">Controls how much our offense drives the ranking.</p>
                 </div>
                 <input
-                  className="range"
-                  type="range"
+                  className="input"
+                  style={{ width: 90 }}
+                  type="number"
+                  step="0.05"
                   min={0}
                   max={1}
-                  step={0.01}
-                  value={Number.isFinite(wOff) ? wOff : 0}
+                  value={wOff}
                   onChange={(e) => setWOff(Number(e.target.value))}
                 />
               </div>
+              <input
+                className="range"
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={Number.isFinite(wOff) ? wOff : 0}
+                onChange={(e) => setWOff(Number(e.target.value))}
+              />
+            </div>
 
-              <div className="weightBox">
-                <div className="weightTop">
-                  <div>
-                    <strong style={{ fontSize: 13 }}>Defense weight</strong>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      w_def (input): {fmt(wDef, 2)} → normalized: {fmt(norm.wDef, 2)}
-                    </div>
-                  </div>
-                  <input
-                    className="input"
-                    style={{ width: 90 }}
-                    type="number"
-                    step="0.05"
-                    min={0}
-                    max={1}
-                    value={wDef}
-                    onChange={(e) => setWDef(Number(e.target.value))}
-                  />
+            <div className="weightBox">
+              <div className="weightTop">
+                <div>
+                  <div style={{ fontWeight: 900, fontSize: 12 }}>Defense weight</div>
+                  <p className="muted">Controls how much opponent defense drives the ranking.</p>
                 </div>
                 <input
-                  className="range"
-                  type="range"
+                  className="input"
+                  style={{ width: 90 }}
+                  type="number"
+                  step="0.05"
                   min={0}
                   max={1}
-                  step={0.01}
-                  value={Number.isFinite(wDef) ? wDef : 0}
+                  value={wDef}
                   onChange={(e) => setWDef(Number(e.target.value))}
                 />
               </div>
+              <input
+                className="range"
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={Number.isFinite(wDef) ? wDef : 0}
+                onChange={(e) => setWDef(Number(e.target.value))}
+              />
             </div>
-
-            {weightsWarn ? (
-              <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-                Weights currently sum to <strong>{fmt(weightsSum, 2)}</strong>. We normalize internally so the formula
-                stays consistent (w_off + w_def = 1).
-              </p>
-            ) : (
-              <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-                Weights sum looks good (≈ 1). You can still enter any values — we normalize on run.
-              </p>
-            )}
-
-            {/* Action bar: run, export, toggle math, and move forward in the workflow */}
-            <div className="actionDock">
-              <div className="actionLeft">
-                <button className="btn" type="button" onClick={runBaseline} disabled={!canRun || loading}>
-                  <span className="btnIcon">
-                    <Icon name="play" /> {loading ? "Running…" : "Run Baseline"}
-                  </span>
-                </button>
-
-                <a className="btn" href={csvUrl} target="_blank" rel="noopener noreferrer" aria-disabled={!canRun}>
-                  <span className="btnIcon">
-                    <Icon name="download" /> Export CSV
-                  </span>
-                </a>
-
-                <button className="btn" type="button" onClick={() => setShowMath((v) => !v)}>
-                  {showMath ? "Hide math fields" : "Show math fields"}
-                </button>
-              </div>
-
-              <div className="actionRight">
-                <Link className="btn" href="/data-explorer">
-                  Data Explorer
-                </Link>
-                <Link className="btn" href={runContextHref}>
-                  Next: AI Context
-                </Link>
-              </div>
-            </div>
-
-            {error ? (
-              <p className="muted" style={{ marginTop: 12 }}>
-                {error}
-              </p>
-            ) : null}
           </div>
 
-          {/* Quick KPI strip: makes it obvious what matchup/settings we’re looking at */}
-          {season && our && opp ? (
-            <div className="grid" style={{ marginTop: 12 }}>
-              <div className="kpi">
-                <div className="label">Matchup</div>
-                <div className="value" style={{ fontSize: 16, fontWeight: 800 }}>
-                  {our} vs {opp}
+          <div className="row">
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="btn btnPrimary" type="button" onClick={runBaseline} disabled={!canRun || loading}>
+                <Icon name="play" /> {loading ? "Running…" : "Run Baseline"}
+              </button>
+
+              <a className="btn" href={csvUrl} target="_blank" rel="noopener noreferrer" aria-disabled={!canRun}>
+                <Icon name="download" /> Export CSV
+              </a>
+            </div>
+
+            <div className="badge">{season && our && opp ? matchupLabel : "Select teams"}</div>
+          </div>
+
+          {error ? <div className="error">{error}</div> : null}
+        </div>
+      </div>
+
+      {/* Results */}
+      <div className="card resultsCard">
+        <div className="sectionTitle">
+          <h2>Top recommendations</h2>
+          <span className="badge">{rows.length ? `${our} vs ${opp} • ${season}` : "Run to see results"}</span>
+        </div>
+
+        {!loading && rows.length === 0 ? (
+          <p className="muted">Pick teams + season, then click Run Baseline.</p>
+        ) : loading ? (
+          <p className="muted">Computing shrunk PPPs and ranking Top-K…</p>
+        ) : (
+          <>
+            {/* Top 1 */}
+            {bestRow ? (
+              <div className="topRec">
+                <div className="topRecTitle">
+                  <div className="playName">
+                    #{1} {bestRow.playType}
+                  </div>
+                  <div className="badge">
+                    Pred PPP <span className="mono">{fmt(bestRow.pppPred, 3)}</span>
+                  </div>
                 </div>
-                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                  {ourLabel} vs {oppLabel}
+                <p className="muted" style={{ marginTop: 8 }}>
+                  {bestRow.rationale}
+                </p>
+
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => {
+                      setVizPlayType(bestRow.playType);
+                      runViz(bestRow.playType);
+                    }}
+                    disabled={vizLoading}
+                  >
+                    <Icon name="map" /> {vizLoading ? "Generating…" : "Generate map"}
+                  </button>
+
+                  <a className="btn" href={getPdfUrlForPlayType(bestRow.playType)} target="_blank" rel="noopener noreferrer">
+                    <Icon name="pdf" /> Export 1-page PDF
+                  </a>
                 </div>
               </div>
+            ) : null}
 
-              <div className="kpi">
-                <div className="label">Season / Top-K</div>
-                <div className="value">
-                  {season} / {k}
-                </div>
-                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                  Ranked from matchup-specific play-type performance.
-                </div>
+            {/* Top-K bars */}
+            <div className="barList" style={{ marginTop: 12 }}>
+              {rows.map((r, idx) => {
+                // Stable bar scale (avoid “blowing up” on high PPP)
+                const width = clamp01(Number(r.pppPred) / 1.4) * 100;
+                return (
+                  <div key={`${r.playType}-${idx}`} className="barRow">
+                    <div className="barLabel">
+                      <div style={{ fontWeight: 900, fontSize: 12 }}>
+                        #{idx + 1} {r.playType}
+                      </div>
+                      <div className="muted">
+                        gap <span className="mono">{fmt(r.pppGap, 3)}</span>
+                      </div>
+                    </div>
+
+                    <div className="meter" aria-label={`Predicted PPP bar for ${r.playType}`}>
+                      <div style={{ width: `${width}%` }} />
+                    </div>
+
+                    <div className="mono">{fmt(r.pppPred, 3)}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Court map (simple, coach-friendly) */}
+            <div style={{ marginTop: 14 }}>
+              <div className="sectionTitle">
+                <h2>Court map</h2>
+                <span className="badge">SportyPy</span>
               </div>
 
-              <div className="kpi">
-                <div className="label">Weights used</div>
-                <div className="value" style={{ fontFamily: "var(--mono)" }}>
-                  off={fmt(norm.wOff, 2)} / def={fmt(norm.wDef, 2)}
+              <div className="grid2">
+                <div>
+                  <label>
+                    Play type
+                    <select
+                      className="input"
+                      value={vizPlayType}
+                      onChange={(e) => setVizPlayType(e.target.value)}
+                      disabled={!rows.length}
+                    >
+                      {rows.length ? (
+                        rows.map((rr) => (
+                          <option key={rr.playType} value={rr.playType}>
+                            {rr.playType}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">Run baseline first…</option>
+                      )}
+                    </select>
+                  </label>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                    <button className="btn" type="button" onClick={() => runViz()} disabled={!vizReady || vizLoading}>
+                      <Icon name="map" /> {vizLoading ? "Generating…" : "Generate map"}
+                    </button>
+
+                    <a
+                      className="btn"
+                      href={getPdfUrlForPlayType(vizPlayType)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-disabled={!vizReady}
+                    >
+                      <Icon name="pdf" /> Export PDF
+                    </a>
+                  </div>
+
+                  {vizError ? <div className="error">{vizError}</div> : null}
+                  {viz?.caption ? (
+                    <p className="muted" style={{ marginTop: 10 }}>
+                      {viz.caption}
+                    </p>
+                  ) : (
+                    <p className="muted" style={{ marginTop: 10 }}>
+                      Generate a map to attach a clean visual to your recommendation.
+                    </p>
+                  )}
                 </div>
-                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                  Normalized for stable, committee-friendly interpretation.
+
+                <div>
+                  {!viz ? (
+                    <div
+                      style={{
+                        borderRadius: 14,
+                        border: "1px dashed rgba(15,23,42,0.18)",
+                        padding: 12,
+                        background: "rgba(255,255,255,0.7)",
+                      }}
+                    >
+                      <p className="muted" style={{ margin: 0 }}>
+                        No map yet. Generate a map for the selected play type.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="imgFrame">
+                      <img src={`data:image/png;base64,${viz.image_base64}`} alt="Court map" />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
-          ) : null}
 
-          {/* Results block: highlight #1, bars for quick scan, then the full explainable table */}
-          {!loading && rows.length > 0 ? (
-            <div className="subtleCard" style={{ marginTop: 12 }}>
-              <div className="panelTitle">
-                <h2 style={{ margin: 0, fontSize: 16 }}>Top recommendations</h2>
-                <span className="pillMini">
-                  {our} vs {opp} • {season}
-                </span>
+            {/* Details (kept for defense / trust, but not in the main coach flow) */}
+            <details style={{ marginTop: 14 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 900, color: "rgba(15,23,42,0.9)" }}>
+                Show details table
+              </summary>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                <button className="btn" type="button" onClick={() => setShowMath((v) => !v)}>
+                  {showMath ? "Hide raw fields" : "Show raw fields"}
+                </button>
               </div>
-
-              {/* #1 summary card: “here’s the recommendation + why” */}
-              {bestRow ? (
-                <div className="kpi" style={{ marginTop: 10 }}>
-                  <div className="label">#1 Play Type</div>
-                  <div className="value" style={{ fontSize: 16, fontWeight: 900 }}>
-                    {bestRow.playType} (Pred PPP {fmt(bestRow.pppPred, 3)})
-                  </div>
-                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                    {bestRow.rationale}
-                  </div>
-
-                  <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button
-                      className="btn"
-                      type="button"
-                      onClick={() => {
-                        setVizPlayType(bestRow.playType);
-                        runViz(bestRow.playType);
-                      }}
-                      disabled={vizLoading}
-                    >
-                      <span className="btnIcon">
-                        <Icon name="map" /> {vizLoading ? "Generating map…" : "Generate map"}
-                      </span>
-                    </button>
-
-                    <a className="btn" href={getPdfUrlForPlayType(bestRow.playType)} target="_blank" rel="noopener noreferrer">
-                      <span className="btnIcon">
-                        <Icon name="pdf" /> Export 1-page PDF
-                      </span>
-                    </a>
-                  </div>
-                </div>
-              ) : null}
-
-              {/* Quick scan bars: helps non-technical users see ranking strength instantly */}
-              <div style={{ marginTop: 12 }}>
-                <h3 style={{ margin: "6px 0 10px", fontSize: 14 }}>Predicted PPP bars</h3>
-                <div style={{ display: "grid", gap: 8 }}>
-                  {rows.map((r) => {
-                    const width = clamp01(Number(r.pppPred) / 1.4) * 100;
-                    return (
-                      <div
-                        key={r.playType}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "220px 1fr 90px",
-                          gap: 10,
-                          alignItems: "center",
-                        }}
-                      >
-                        <div style={{ fontSize: 13 }}>
-                          <strong>{r.playType}</strong>
-                          <div className="muted" style={{ fontSize: 11 }}>
-                            gap {fmt(r.pppGap, 3)}
-                          </div>
-                        </div>
-
-                        <div className="meter" aria-label={`Predicted PPP bar for ${r.playType}`}>
-                          <div style={{ width: `${width}%` }} />
-                        </div>
-
-                        <div style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{fmt(r.pppPred, 3)}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="divider" />
-
-              {/* Full explainable table: this is the “defend it in a presentation” part */}
-              <h3 style={{ margin: "0 0 10px", fontSize: 14 }}>Explainable ranking table</h3>
 
               <div className="tableWrap">
-                <table className="table">
+                <table>
                   <thead>
                     <tr>
                       <th>#</th>
                       <th>Play Type</th>
-                      <th>Viz</th>
                       <th>Pred PPP</th>
                       <th>Our PPP (shrunk)</th>
                       <th>Opp Allowed (shrunk)</th>
                       <th>Gap</th>
-
                       {showMath ? (
                         <>
                           <th>Poss (our)</th>
@@ -990,7 +1037,6 @@ export default function MatchupPage() {
                           <th>League PPP (def)</th>
                         </>
                       ) : null}
-
                       <th>Rationale</th>
                     </tr>
                   </thead>
@@ -1000,37 +1046,7 @@ export default function MatchupPage() {
                       return (
                         <tr key={`${r.playType}-${idx}`}>
                           <td>{idx + 1}</td>
-                          <td>
-                            <strong>{r.playType}</strong>
-                          </td>
-
-                          <td style={{ whiteSpace: "nowrap" }}>
-                            <button
-                              className="btn"
-                              type="button"
-                              onClick={() => {
-                                setVizPlayType(r.playType);
-                                runViz(r.playType);
-                              }}
-                              disabled={vizLoading}
-                            >
-                              <span className="btnIcon">
-                                <Icon name="map" /> Map
-                              </span>
-                            </button>
-                            <a
-                              className="btn"
-                              href={getPdfUrlForPlayType(r.playType)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ marginLeft: 8 }}
-                            >
-                              <span className="btnIcon">
-                                <Icon name="pdf" /> PDF
-                              </span>
-                            </a>
-                          </td>
-
+                          <td style={{ fontWeight: 900 }}>{r.playType}</td>
                           <td>{fmt(r.pppPred, 3)}</td>
                           <td>{fmt(r.pppOff, 3)}</td>
                           <td>{fmt(r.pppDef, 3)}</td>
@@ -1047,136 +1063,75 @@ export default function MatchupPage() {
                             </>
                           ) : null}
 
-                          <td style={{ fontSize: 12 }}>{r.rationale}</td>
+                          <td style={{ whiteSpace: "normal", minWidth: 360 }}>{r.rationale}</td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
+            </details>
+          </>
+        )}
+      </div>
 
-              <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
-                This page is the <strong>baseline</strong> (explainable reference). The AI Context Simulator shows how ML
-                + game-state changes the ranking and returns adjustment breakdown fields.
-              </p>
-            </div>
-          ) : !loading ? (
-            <div className="subtleCard" style={{ marginTop: 12 }}>
-              <h2 style={{ marginTop: 0, fontSize: 16 }}>Run a matchup to see results</h2>
-              <p className="muted" style={{ fontSize: 13 }}>
-                Pick teams + season, then click <strong>Run Baseline</strong>. You’ll get Top-K ranked play types plus
-                explainable reasoning fields and optional court-map visuals.
-              </p>
-            </div>
-          ) : (
-            <div className="subtleCard" style={{ marginTop: 12 }}>
-              <h2 style={{ marginTop: 0, fontSize: 16 }}>Running baseline…</h2>
-              <p className="muted" style={{ fontSize: 13 }}>
-                Computing shrunk offense/defense PPP, applying weighted blend, ranking Top-K, and returning reasoning fields.
-              </p>
-            </div>
-          )}
-        </div>
+      {/* ✅ More info (all explanations live here, at the bottom) */}
+      <details className="moreInfo">
+        <summary>More info</summary>
 
-        {/* RIGHT: SportyPy visual panel + quick exports (this is the “make it real” side) */}
-        <div className="stickyRight">
-          <div className="subtleCard">
-            <div className="panelTitle">
-              <h2 style={{ margin: 0, fontSize: 16 }}>Court map (SportyPy)</h2>
-              <span className="pillMini">
-                <Icon name="map" /> Visual layer
+        <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+          <div className="card" style={{ padding: 12 }}>
+            <div className="sectionTitle" style={{ marginBottom: 6 }}>
+              <h2>How the baseline works</h2>
+              <span className="badge">Explainability</span>
+            </div>
+
+            <p className="muted" style={{ lineHeight: 1.55 }}>
+              <span className="mono">
+                {baselineInfo?.formula ?? "PPP_PRED = w_off * PPP_OFF_SHRUNK + w_def * PPP_DEF_SHRUNK"}
               </span>
-            </div>
-
-            <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
-              Attach a real visual to your recommendation. Pick a play type from the ranked list, then generate the map.
             </p>
 
-            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span className="muted" style={{ fontSize: 12 }}>Play type</span>
-                <select
-                  className="input"
-                  value={vizPlayType}
-                  onChange={(e) => setVizPlayType(e.target.value)}
-                  disabled={rows.length === 0}
-                >
-                  {rows.length ? (
-                    rows.map((r) => (
-                      <option key={r.playType} value={r.playType}>
-                        {r.playType}
-                      </option>
-                    ))
-                  ) : (
-                    <option value="">Run baseline first…</option>
-                  )}
-                </select>
-              </label>
+            <p className="muted" style={{ lineHeight: 1.55, marginTop: 8 }}>
+              <strong>Why shrinkage?</strong>{" "}
+              {baselineInfo?.whyShrinkage ??
+                "It reduces small-sample noise so play types with few possessions don’t look unrealistically good or bad."}
+            </p>
+          </div>
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button className="btn" type="button" onClick={() => runViz()} disabled={!vizReady || vizLoading}>
-                  <span className="btnIcon">
-                    <Icon name="map" /> {vizLoading ? "Generating…" : "Generate map"}
-                  </span>
-                </button>
-
-                <a
-                  className="btn"
-                  href={getPdfUrlForPlayType(vizPlayType)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-disabled={!vizReady}
-                >
-                  <span className="btnIcon">
-                    <Icon name="pdf" /> Export PDF
-                  </span>
-                </a>
+          {baselineInfo?.definitions ? (
+            <div className="card" style={{ padding: 12 }}>
+              <div className="sectionTitle" style={{ marginBottom: 6 }}>
+                <h2>Definitions</h2>
+                <span className="badge">Terms</span>
               </div>
 
-              {vizError ? (
-                <p className="muted" style={{ fontSize: 12 }}>
-                  {vizError}
-                </p>
-              ) : null}
-
-              {!viz ? (
-                <div style={{ borderRadius: 14, border: "1px dashed rgba(15,23,42,0.18)", padding: 12 }}>
-                  <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-                    {rows.length
-                      ? "Generate a map for the selected play type to get a clean, coach-friendly visual."
-                      : "Run the baseline to populate play types, then generate a map."}
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  <p className="muted" style={{ fontSize: 12, marginTop: 6, marginBottom: 10 }}>
-                    {viz.caption}
-                  </p>
-                  <div className="imgFrame">
-                    <img src={`data:image/png;base64,${viz.image_base64}`} alt="Court map" />
+              <div style={{ display: "grid", gap: 8 }}>
+                {Object.entries(baselineInfo.definitions).map(([kk, vv]) => (
+                  <div key={kk} className="muted" style={{ lineHeight: 1.55 }}>
+                    <span className="mono">{kk}</span>: {vv}
                   </div>
-                </div>
-              )}
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="card" style={{ padding: 12 }}>
+            <div className="sectionTitle" style={{ marginBottom: 6 }}>
+              <h2>What happens when you run this</h2>
+              <span className="badge">Backend</span>
             </div>
 
-            <div className="divider" />
-
-            {/* Evidence links: makes it easy to jump into “proof” pages when presenting */}
-            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Quick links</h3>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Link className="btn" href="/model-metrics">
-                Evidence (Plays)
-              </Link>
-              <Link className="btn" href="/statistical-analysis">
-                Stats Analysis (Plays)
-              </Link>
-              <Link className="btn" href="/glossary">
-                Glossary
-              </Link>
-            </div>
+            <ul className="muted" style={{ paddingLeft: 18, margin: 0, lineHeight: 1.65 }}>
+              <li>Frontend sends: season, our team, opponent, k, and weights.</li>
+              <li>Backend computes shrunk offense PPP (our) by play type.</li>
+              <li>Backend computes shrunk defense-allowed PPP (opponent) by play type.</li>
+              <li>Baseline prediction applies the weighted blend and sorts descending.</li>
+              <li>Response includes Top-K rows + rationale + raw fields (optional).</li>
+            </ul>
           </div>
         </div>
-      </div>
+      </details>
     </section>
   );
 }
