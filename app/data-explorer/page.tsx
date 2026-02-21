@@ -123,7 +123,6 @@ export default function DataExplorerPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [search, setSearch] = useState<string>("");
   const [showPipeline, setShowPipeline] = useState<boolean>(true);
-  const [toast, setToast] = useState<string>("");
 
   // I use request IDs so if a user changes filters quickly, stale responses don’t overwrite newer ones.
   const requestIdRef = useRef(0);
@@ -463,25 +462,6 @@ export default function DataExplorerPage() {
           </p>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            {toast ? <span className="badge">{toast}</span> : null}
-            <button
-              className="btn btn--secondary"
-              type="button"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(apiExample);
-                  setToast("API copied ✅");
-                  window.setTimeout(() => setToast(""), 900);
-                } catch {
-                  setToast("Copy failed");
-                  window.setTimeout(() => setToast(""), 900);
-                }
-              }}
-              title="Copy the exact API request for this preview"
-            >
-              Copy API
-            </button>
-
             <button
               className="btn btn--secondary"
               type="button"
