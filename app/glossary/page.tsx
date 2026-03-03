@@ -1,6 +1,6 @@
 // app/glossary/page.tsx
 //
-// Glossary (committee-friendly, comprehensive)
+// Glossary
 //
 // What this page does:
 // - Plain-English definitions for *everything the product uses* across all pages.
