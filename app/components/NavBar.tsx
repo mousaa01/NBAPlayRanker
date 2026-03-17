@@ -2,14 +2,18 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createClient } from "../../lib/supabase/client";
 
 type NavItem = { href: string; label: string };
 type MenuKey = null; // no dropdowns for now
+type UserRole = "coach" | "analyst" | null;
 
 export default function NavBar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const supabase = useMemo(() => createClient(), []);
 
   const headerRef = useRef<HTMLElement | null>(null);
 
@@ -17,17 +21,28 @@ export default function NavBar() {
   const [menuOpen, setMenuOpen] = useState<MenuKey>(null);
   void menuOpen; // kept so structure doesn't shift later when you re-enable RBAC menus
 
-  // Primary links
+  const [authLoading, setAuthLoading] = useState(true);
+  const [userRole, setUserRole] = useState<UserRole>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  // Shared links
   const topHome: NavItem = useMemo(() => ({ href: "/", label: "Home" }), []);
-  const dataExplorer: NavItem = useMemo(() => ({ href: "/data-explorer", label: "Data Explorer" }), []);
-  const matchupBaseline: NavItem = useMemo(() => ({ href: "/matchup", label: "Matchup / Baseline" }), []);
-  const contextML: NavItem = useMemo(() => ({ href: "/context", label: "Context / ML" }), []);
-  const modelPerformance: NavItem = useMemo(() => ({ href: "/model-metrics", label: "Model Performance" }), []);
-  const gamePlan: NavItem = useMemo(() => ({ href: "/gameplan", label: "Gameplan" }), []);
   const glossary: NavItem = useMemo(() => ({ href: "/glossary", label: "Glossary" }), []);
 
-  // ✅ Future pages (commented for RBAC later)
-  // const statisticalAnalysis: NavItem = useMemo(() => ({ href: "/statistical-analysis", label: "Statistical Analysis" }), []);
+  // Coach-only links
+  const matchupBaseline: NavItem = useMemo(() => ({ href: "/matchup", label: "Matchup / Baseline" }), []);
+  const contextML: NavItem = useMemo(() => ({ href: "/context", label: "Context / ML" }), []);
+  const gamePlan: NavItem = useMemo(() => ({ href: "/gameplan", label: "Gameplan" }), []);
+
+  // Analyst-only links
+  const dataExplorer: NavItem = useMemo(() => ({ href: "/data-explorer", label: "Data Explorer" }), []);
+  const modelPerformance: NavItem = useMemo(() => ({ href: "/model-metrics", label: "Model Performance" }), []);
+
+  // ✅ Future pages (RBAC-ready)
+  // const statisticalAnalysis: NavItem = useMemo(
+  //   () => ({ href: "/statistical-analysis", label: "Statistical Analysis" }),
+  //   []
+  // );
   // const shotPlan: NavItem = useMemo(() => ({ href: "/shot-plan", label: "Shot Plan" }), []);
   // const shotExplorer: NavItem = useMemo(() => ({ href: "/shot-explorer", label: "Shot Explorer" }), []);
   // const shotHeatmap: NavItem = useMemo(() => ({ href: "/shot-heatmap", label: "Shot Heatmap" }), []);
@@ -36,6 +51,22 @@ export default function NavBar() {
   //   () => ({ href: "/shot-statistical-analysis", label: "Shot Statistical Analysis" }),
   //   []
   // );
+
+  const sharedLinks = useMemo<NavItem[]>(() => [topHome, glossary], [topHome, glossary]);
+  const coachLinks = useMemo<NavItem[]>(
+    () => [matchupBaseline, contextML, gamePlan],
+    [matchupBaseline, contextML, gamePlan]
+  );
+  const analystLinks = useMemo<NavItem[]>(
+    () => [dataExplorer, modelPerformance],
+    [dataExplorer, modelPerformance]
+  );
+
+  const visibleLinks = useMemo<NavItem[]>(() => {
+    if (userRole === "coach") return [...sharedLinks, ...coachLinks];
+    if (userRole === "analyst") return [...sharedLinks, ...analystLinks];
+    return sharedLinks;
+  }, [userRole, sharedLinks, coachLinks, analystLinks]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -51,6 +82,61 @@ export default function NavBar() {
     setMenuOpen(null);
     setMobileOpen(false);
   }
+
+  async function loadProfile() {
+    setAuthLoading(true);
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setUserRole(null);
+      setUserEmail(null);
+      setAuthLoading(false);
+      return;
+    }
+
+    setUserEmail(user.email ?? null);
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .single();
+
+    const roleFromProfile = profile?.role as UserRole | undefined;
+    const roleFromMetadata =
+      user.user_metadata?.role === "coach" || user.user_metadata?.role === "analyst"
+        ? (user.user_metadata.role as UserRole)
+        : null;
+
+    setUserRole(roleFromProfile ?? roleFromMetadata ?? null);
+    setAuthLoading(false);
+  }
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function init() {
+      await loadProfile();
+    }
+
+    init();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async () => {
+      if (!mounted) return;
+      await loadProfile();
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
 
   useEffect(() => {
     function onDown(e: MouseEvent) {
@@ -69,6 +155,15 @@ export default function NavBar() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    closeAll();
+    setUserRole(null);
+    setUserEmail(null);
+    router.push("/login");
+    router.refresh();
+  }
 
   function NavLink({
     item,
@@ -109,6 +204,71 @@ export default function NavBar() {
     );
   }
 
+  function DesktopAuth() {
+    if (authLoading) {
+      return (
+        <div className="npr-auth-shell" aria-hidden>
+          <div className="npr-auth-loading">Loading…</div>
+        </div>
+      );
+    }
+
+    if (!userEmail) {
+      return (
+        <div className="npr-auth-shell">
+          <Link href="/login" className="npr-auth-link" onClick={() => closeAll()}>
+            Log in
+          </Link>
+          <Link href="/signup" className="npr-auth-link npr-auth-primary" onClick={() => closeAll()}>
+            Sign up
+          </Link>
+        </div>
+      );
+    }
+
+    return (
+      <div className="npr-auth-shell">
+        <div className="npr-role-badge">
+          <span className="npr-role-dot" aria-hidden />
+          {userRole === "coach" ? "Coach" : userRole === "analyst" ? "Analyst" : "User"}
+        </div>
+        <button type="button" className="npr-auth-link" onClick={handleSignOut}>
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  function MobileAuth() {
+    if (authLoading) {
+      return <div className="npr-mobile-meta">Loading account…</div>;
+    }
+
+    if (!userEmail) {
+      return (
+        <>
+          <Link href="/login" className="npr-mobile-link" onClick={() => closeAll()}>
+            Log in
+          </Link>
+          <Link href="/signup" className="npr-mobile-link npr-mobile-primary" onClick={() => closeAll()}>
+            Sign up
+          </Link>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <div className="npr-mobile-meta">
+          Signed in as {userRole === "coach" ? "Coach" : userRole === "analyst" ? "Analyst" : "User"}
+        </div>
+        <button type="button" className="npr-mobile-link npr-mobile-button" onClick={handleSignOut}>
+          Sign out
+        </button>
+      </>
+    );
+  }
+
   return (
     <header ref={headerRef} className="npr-header">
       <div className="npr-bar">
@@ -143,24 +303,19 @@ export default function NavBar() {
 
         {/* Desktop nav */}
         <nav className="npr-nav" aria-label="Primary navigation">
-          <NavLink item={topHome} className="npr-link" />
-          <NavLink item={dataExplorer} className="npr-link" />
-          <NavLink item={matchupBaseline} className="npr-link" />
-          <NavLink item={contextML} className="npr-link" />
-          <NavLink item={modelPerformance} className="npr-link" />
-          <NavLink item={gamePlan} className="npr-link" cta />
-          <NavLink item={glossary} className="npr-link" />
-
-          {/* Future pages (RBAC) */}
-          {/*
-          <NavLink item={statisticalAnalysis} className="npr-link" />
-          <NavLink item={shotPlan} className="npr-link" />
-          <NavLink item={shotExplorer} className="npr-link" />
-          <NavLink item={shotHeatmap} className="npr-link" />
-          <NavLink item={shotModelMetrics} className="npr-link" />
-          <NavLink item={shotStatisticalAnalysis} className="npr-link" />
-          */}
+          {visibleLinks.map((item) => (
+            <NavLink
+              key={item.href}
+              item={item}
+              className="npr-link"
+              cta={item.href === "/gameplan"}
+            />
+          ))}
         </nav>
+
+        <div className="npr-desktop-auth">
+          <DesktopAuth />
+        </div>
 
         <button
           className="npr-burger"
@@ -180,15 +335,19 @@ export default function NavBar() {
 
       {/* Mobile menu */}
       <div className={`npr-mobile ${mobileOpen ? "open" : ""}`} aria-label="Mobile navigation">
-        <NavLink item={topHome} className="npr-mobile-link" block />
-        <NavLink item={dataExplorer} className="npr-mobile-link" block />
-        <NavLink item={matchupBaseline} className="npr-mobile-link" block />
-        <NavLink item={contextML} className="npr-mobile-link" block />
-        <NavLink item={modelPerformance} className="npr-mobile-link" block />
-        <NavLink item={gamePlan} className="npr-mobile-link npr-cta-mobile" block cta />
-        <NavLink item={glossary} className="npr-mobile-link" block />
+        {visibleLinks.map((item) => (
+          <NavLink
+            key={item.href}
+            item={item}
+            className={`npr-mobile-link ${item.href === "/gameplan" ? "npr-cta-mobile" : ""}`}
+            block
+            cta={item.href === "/gameplan"}
+          />
+        ))}
 
-        {/* Future pages (RBAC) */}
+        <MobileAuth />
+
+        {/* Future pages (RBAC-ready) */}
         {/*
         <NavLink item={statisticalAnalysis} className="npr-mobile-link" block />
         <NavLink item={shotPlan} className="npr-mobile-link" block />
@@ -200,9 +359,6 @@ export default function NavBar() {
       </div>
 
       <style jsx>{`
-        /* =========================================================
-           Header: keep your existing scheme
-        ========================================================= */
         .npr-header {
           position: sticky;
           top: 0;
@@ -224,7 +380,7 @@ export default function NavBar() {
 
         .npr-bar {
           position: relative;
-          max-width: 1200px;
+          max-width: 1260px;
           margin: 0 auto;
           padding: 12px 16px;
           display: flex;
@@ -233,14 +389,12 @@ export default function NavBar() {
           gap: 16px;
         }
 
-        /* =========================================================
-           Brand
-        ========================================================= */
         .npr-brand {
           display: flex;
           align-items: center;
           gap: 12px;
           min-width: 260px;
+          flex-shrink: 0;
         }
 
         .npr-mark {
@@ -314,14 +468,12 @@ export default function NavBar() {
           letter-spacing: -0.1px;
         }
 
-        /* =========================================================
-           Desktop nav links
-        ========================================================= */
         .npr-nav {
           display: flex;
           align-items: center;
           gap: 10px;
           flex-wrap: nowrap;
+          min-width: 0;
         }
 
         .npr-link {
@@ -350,9 +502,6 @@ export default function NavBar() {
           box-shadow: 0 14px 30px rgba(29, 66, 138, 0.14);
         }
 
-        /* =========================================================
-           Gameplan CTA
-        ========================================================= */
         .npr-cta {
           font-weight: 900;
           position: relative;
@@ -392,9 +541,85 @@ export default function NavBar() {
           left: 140%;
         }
 
-        /* =========================================================
-           Burger + Mobile
-        ========================================================= */
+        .npr-desktop-auth {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          min-width: 170px;
+          flex-shrink: 0;
+        }
+
+        .npr-auth-shell {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .npr-auth-loading {
+          padding: 10px 12px;
+          border-radius: 999px;
+          font-weight: 700;
+          font-size: 13px;
+          color: rgba(15, 23, 42, 0.72);
+          background: rgba(255, 255, 255, 0.65);
+          border: 1px solid rgba(15, 23, 42, 0.08);
+          box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+        }
+
+        .npr-auth-link {
+          appearance: none;
+          border: 1px solid rgba(15, 23, 42, 0.1);
+          background: rgba(255, 255, 255, 0.75);
+          color: rgba(15, 23, 42, 0.9);
+          padding: 10px 12px;
+          border-radius: 999px;
+          font-weight: 800;
+          line-height: 1;
+          text-decoration: none;
+          cursor: pointer;
+          box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+          transition: background 160ms ease, border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+        }
+
+        .npr-auth-link:hover {
+          background: rgba(255, 255, 255, 0.96);
+          border-color: rgba(29, 66, 138, 0.18);
+          transform: translateY(-1px);
+          box-shadow: 0 14px 26px rgba(15, 23, 42, 0.1);
+        }
+
+        .npr-auth-primary {
+          background: linear-gradient(135deg, #1d428a 0%, #2563eb 48%, #7c3aed 100%);
+          color: #fff;
+          border-color: rgba(255, 255, 255, 0.18);
+        }
+
+        .npr-auth-primary:hover {
+          filter: brightness(1.04);
+        }
+
+        .npr-role-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 12px;
+          border-radius: 999px;
+          font-weight: 850;
+          font-size: 13px;
+          color: #0f172a;
+          background: rgba(255, 255, 255, 0.75);
+          border: 1px solid rgba(15, 23, 42, 0.08);
+          box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+        }
+
+        .npr-role-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          background: linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ec4899 100%);
+          box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+        }
+
         .npr-burger {
           display: none;
           border: 1px solid rgba(15, 23, 42, 0.14);
@@ -427,6 +652,7 @@ export default function NavBar() {
 
         .npr-mobile-link {
           display: block;
+          width: 100%;
           padding: 12px 12px;
           border-radius: 16px;
           font-weight: 900;
@@ -435,16 +661,50 @@ export default function NavBar() {
           border: 1px solid rgba(15, 23, 42, 0.1);
           box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
           margin-top: 8px;
+          text-decoration: none;
         }
 
         .npr-mobile-link:hover {
           background: rgba(255, 255, 255, 0.95);
         }
 
+        .npr-mobile-button {
+          appearance: none;
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .npr-mobile-primary {
+          background: linear-gradient(135deg, #1d428a 0%, #2563eb 48%, #7c3aed 100%);
+          color: #fff;
+          border-color: rgba(255, 255, 255, 0.18);
+        }
+
+        .npr-mobile-meta {
+          margin-top: 10px;
+          padding: 12px 14px;
+          border-radius: 16px;
+          font-weight: 800;
+          font-size: 14px;
+          color: rgba(15, 23, 42, 0.78);
+          background: rgba(255, 255, 255, 0.72);
+          border: 1px solid rgba(15, 23, 42, 0.08);
+          box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+        }
+
+        @media (max-width: 1180px) {
+          .npr-link {
+            padding: 10px 10px;
+            font-size: 14px;
+          }
+        }
+
         @media (max-width: 980px) {
-          .npr-nav {
+          .npr-nav,
+          .npr-desktop-auth {
             display: none;
           }
+
           .npr-burger {
             display: inline-block;
           }
