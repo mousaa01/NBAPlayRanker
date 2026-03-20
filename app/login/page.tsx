@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
 import { createClient } from "../../lib/supabase/client";
 
 type UserRole = "coach" | "analyst";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = useMemo(() => createClient(), []);
@@ -43,7 +43,8 @@ export default function LoginPage() {
       .single();
 
     const metadataRole =
-      data.user.user_metadata?.role === "coach" || data.user.user_metadata?.role === "analyst"
+      data.user.user_metadata?.role === "coach" ||
+      data.user.user_metadata?.role === "analyst"
         ? (data.user.user_metadata.role as UserRole)
         : null;
 
@@ -159,5 +160,33 @@ export default function LoginPage() {
         </div>
       </div>
     </section>
+  );
+}
+
+function LoginPageFallback() {
+  return (
+    <section className="auth-page">
+      <div className="auth-shell">
+        <div className="auth-stage">
+          <div className="auth-badge">NBA Play Ranker • Secure access</div>
+          <h1 className="auth-title">Welcome back to the film room.</h1>
+          <p className="auth-copy">Loading login...</p>
+        </div>
+
+        <div className="auth-panel">
+          <div className="auth-panel-kicker">Log in</div>
+          <h2 className="auth-panel-title">Access your workspace</h2>
+          <p className="auth-panel-copy">Loading login form...</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginPageFallback />}>
+      <LoginPageContent />
+    </Suspense>
   );
 }
