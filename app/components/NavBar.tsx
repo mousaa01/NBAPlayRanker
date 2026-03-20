@@ -273,30 +273,32 @@ export default function NavBar() {
         <div className="npr-topbar">
           <div className="npr-brand">
             <Link href="/" className="npr-brand-wrap" onClick={closeAll}>
-              <div className="npr-mark" aria-hidden>
-                <svg className="npr-mark-icon" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.94)" strokeWidth="1.8" />
-                  <path d="M12 3v18" stroke="rgba(255,255,255,0.94)" strokeWidth="1.4" strokeLinecap="round" />
-                  <path d="M3 12h18" stroke="rgba(255,255,255,0.94)" strokeWidth="1.4" strokeLinecap="round" />
-                  <path
-                    d="M6.2 5.2c2.8 3 4.1 5.6 4.1 6.8s-1.3 3.8-4.1 6.8"
-                    stroke="rgba(255,255,255,0.94)"
-                    strokeWidth="1.4"
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M17.8 5.2c-2.8 3-4.1 5.6-4.1 6.8s1.3 3.8 4.1 6.8"
-                    stroke="rgba(255,255,255,0.94)"
-                    strokeWidth="1.4"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </div>
+              <span className="npr-brand-row">
+                <span className="npr-mark" aria-hidden>
+                  <svg className="npr-mark-icon" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.94)" strokeWidth="1.8" />
+                    <path d="M12 3v18" stroke="rgba(255,255,255,0.94)" strokeWidth="1.4" strokeLinecap="round" />
+                    <path d="M3 12h18" stroke="rgba(255,255,255,0.94)" strokeWidth="1.4" strokeLinecap="round" />
+                    <path
+                      d="M6.2 5.2c2.8 3 4.1 5.6 4.1 6.8s-1.3 3.8-4.1 6.8"
+                      stroke="rgba(255,255,255,0.94)"
+                      strokeWidth="1.4"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M17.8 5.2c-2.8 3-4.1 5.6-4.1 6.8s1.3 3.8 4.1 6.8"
+                      stroke="rgba(255,255,255,0.94)"
+                      strokeWidth="1.4"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </span>
 
-              <div className="npr-brand-copy">
-                <div className="npr-brand-title">NBA Play Ranker</div>
-                <div className="npr-brand-subtitle">Decision Support • Explainable + AI</div>
-              </div>
+                <span className="npr-brand-copy">
+                  <span className="npr-brand-title">NBA Play Ranker</span>
+                  <span className="npr-brand-subtitle">Decision Support • Explainable + AI</span>
+                </span>
+              </span>
             </Link>
           </div>
 
@@ -402,17 +404,24 @@ export default function NavBar() {
 
         .npr-brand {
           min-width: 0;
-          flex: 0 1 auto;
+          flex: 0 0 auto;
         }
 
-        /* THIS guarantees: logo on left, text block on the right */
         .npr-brand-wrap {
-          display: grid !important;
-          grid-template-columns: 42px auto;
-          align-items: center;
-          column-gap: 12px;
+          display: inline-block !important;
           text-decoration: none !important;
           min-width: 0;
+        }
+
+        .npr-brand-row {
+          display: flex !important;
+          flex-direction: row !important;
+          flex-wrap: nowrap !important;
+          align-items: center !important;
+          justify-content: flex-start !important;
+          gap: 12px !important;
+          min-width: 0;
+          white-space: nowrap;
         }
 
         .npr-mark {
@@ -426,7 +435,7 @@ export default function NavBar() {
           place-items: center;
           border: 1px solid rgba(255,255,255,0.36);
           box-shadow: 0 14px 28px rgba(37, 99, 235, 0.18);
-          flex-shrink: 0;
+          flex: 0 0 42px;
         }
 
         .npr-mark-icon {
@@ -436,11 +445,14 @@ export default function NavBar() {
         }
 
         .npr-brand-copy {
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: center !important;
+          align-items: flex-start !important;
           gap: 3px;
           min-width: 0;
+          white-space: nowrap;
+          flex: 0 1 auto;
         }
 
         .npr-brand-title {
@@ -613,7 +625,6 @@ export default function NavBar() {
           box-shadow: 0 10px 20px rgba(15, 23, 42, 0.04);
         }
 
-        /* THIS matches the auth CTA look */
         .npr-cta-signout {
           appearance: none;
           border: 1px solid rgba(255, 255, 255, 0.18);
@@ -810,7 +821,6 @@ export default function NavBar() {
           box-shadow: 0 18px 34px rgba(124, 58, 237, 0.2);
         }
 
-        /* mobile sign out matches create account button too */
         .npr-mobile-cta-signout {
           appearance: none;
           width: 100%;
@@ -869,9 +879,8 @@ export default function NavBar() {
             padding: 8px 14px 10px;
           }
 
-          .npr-brand-wrap {
-            grid-template-columns: 38px auto;
-            column-gap: 10px;
+          .npr-brand-row {
+            gap: 10px !important;
           }
 
           .npr-brand-title {
@@ -887,6 +896,7 @@ export default function NavBar() {
             width: 38px;
             height: 38px;
             border-radius: 13px;
+            flex-basis: 38px;
           }
         }
       `}</style>
