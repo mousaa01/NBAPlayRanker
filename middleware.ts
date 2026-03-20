@@ -1,13 +1,35 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const coachOnly = ["/matchup", "/context"];
-const analystOnly = ["/data-explorer", "/model-metrics", "/statistical-analysis"];
+type UserRole = "coach" | "analyst" | null;
+
+const signedInOnly = ["/glossary"];
+
+const coachOnly = ["/matchup", "/context", "/gameplan"];
+
+const analystOnly = [
+  "/data-explorer",
+  "/model-metrics",
+  "/statistical-analysis",
+  "/shot-explorer",
+  "/shot-heatmap",
+  "/shot-model-metrics",
+  "/shot-statistical-analysis",
+  "/shot-plan",
+];
+
+function matchesRoute(pathname: string, routes: string[]) {
+  return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+}
+
+function defaultPathForRole(role: UserRole) {
+  if (role === "coach") return "/matchup";
+  if (role === "analyst") return "/data-explorer";
+  return "/";
+}
 
 export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({
-    request,
-  });
+  let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -20,52 +42,63 @@ export async function middleware(request: NextRequest) {
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
           response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          );
+          cookiesToSet.forEach(({ name, value, options }) => {
+            response.cookies.set(name, value, options);
+          });
         },
       },
     }
   );
 
+  const path = request.nextUrl.pathname;
+  const isAuthPage = path === "/login" || path === "/signup";
+
+  const requiresAuth =
+    matchesRoute(path, signedInOnly) ||
+    matchesRoute(path, coachOnly) ||
+    matchesRoute(path, analystOnly);
+
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const path = request.nextUrl.pathname;
-  const isProtected =
-    coachOnly.some((p) => path.startsWith(p)) ||
-    analystOnly.some((p) => path.startsWith(p));
-
-  const isAuthPage = path === "/login" || path === "/signup";
-
-  if (!user && isProtected) {
+  if (!user && requiresAuth) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", path);
+    url.searchParams.set("next", `${path}${request.nextUrl.search}`);
     return NextResponse.redirect(url);
   }
 
-  if (user) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .single();
+  if (!user) {
+    return response;
+  }
 
-    if (isAuthPage) {
-      const url = request.nextUrl.clone();
-      url.pathname = profile?.role === "coach" ? "/matchup" : "/data-explorer";
-      return NextResponse.redirect(url);
-    }
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
 
-    if (profile?.role === "coach" && analystOnly.some((p) => path.startsWith(p))) {
-      return NextResponse.redirect(new URL("/", request.url));
-    }
+  const metadataRole =
+    user.user_metadata?.role === "coach" || user.user_metadata?.role === "analyst"
+      ? (user.user_metadata.role as UserRole)
+      : null;
 
-    if (profile?.role === "analyst" && coachOnly.some((p) => path.startsWith(p))) {
-      return NextResponse.redirect(new URL("/", request.url));
-    }
+  const role = ((profile?.role as UserRole | undefined) ?? metadataRole ?? null) as UserRole;
+
+  if (isAuthPage) {
+    const url = request.nextUrl.clone();
+    url.pathname = defaultPathForRole(role);
+    url.searchParams.delete("next");
+    return NextResponse.redirect(url);
+  }
+
+  if (matchesRoute(path, coachOnly) && role !== "coach") {
+    return NextResponse.redirect(new URL(defaultPathForRole(role), request.url));
+  }
+
+  if (matchesRoute(path, analystOnly) && role !== "analyst") {
+    return NextResponse.redirect(new URL(defaultPathForRole(role), request.url));
   }
 
   return response;

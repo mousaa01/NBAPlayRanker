@@ -1,4 +1,4 @@
-// components/NavBar.tsx
+// app/components/NavBar.tsx
 "use client";
 
 import Link from "next/link";
@@ -7,7 +7,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "../../lib/supabase/client";
 
 type NavItem = { href: string; label: string };
-type MenuKey = null; // no dropdowns for now
+type MenuKey = null;
 type UserRole = "coach" | "analyst" | null;
 
 export default function NavBar() {
@@ -19,7 +19,7 @@ export default function NavBar() {
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState<MenuKey>(null);
-  void menuOpen; // kept so structure doesn't shift later when you re-enable RBAC menus
+  void menuOpen;
 
   const [authLoading, setAuthLoading] = useState(true);
   const [userRole, setUserRole] = useState<UserRole>(null);
@@ -38,7 +38,7 @@ export default function NavBar() {
   const dataExplorer: NavItem = useMemo(() => ({ href: "/data-explorer", label: "Data Explorer" }), []);
   const modelPerformance: NavItem = useMemo(() => ({ href: "/model-metrics", label: "Model Performance" }), []);
 
-  // ✅ Future pages (RBAC-ready)
+  // Future pages
   // const statisticalAnalysis: NavItem = useMemo(
   //   () => ({ href: "/statistical-analysis", label: "Statistical Analysis" }),
   //   []
@@ -88,12 +88,12 @@ export default function NavBar() {
 
     const {
       data: { user },
-      error: userError,
+      error,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
-      setUserRole(null);
+    if (error || !user) {
       setUserEmail(null);
+      setUserRole(null);
       setAuthLoading(false);
       return;
     }
@@ -106,30 +106,30 @@ export default function NavBar() {
       .eq("id", user.id)
       .single();
 
-    const roleFromProfile = profile?.role as UserRole | undefined;
-    const roleFromMetadata =
+    const metadataRole =
       user.user_metadata?.role === "coach" || user.user_metadata?.role === "analyst"
         ? (user.user_metadata.role as UserRole)
         : null;
 
-    setUserRole(roleFromProfile ?? roleFromMetadata ?? null);
+    setUserRole((profile?.role as UserRole | undefined) ?? metadataRole ?? null);
     setAuthLoading(false);
   }
 
   useEffect(() => {
     let mounted = true;
 
-    async function init() {
+    const init = async () => {
+      if (!mounted) return;
       await loadProfile();
-    }
+    };
 
     init();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async () => {
+    } = supabase.auth.onAuthStateChange(() => {
       if (!mounted) return;
-      await loadProfile();
+      loadProfile();
     });
 
     return () => {
@@ -150,7 +150,10 @@ export default function NavBar() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setMenuOpen(null);
+      if (e.key === "Escape") {
+        setMenuOpen(null);
+        setMobileOpen(false);
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -158,9 +161,9 @@ export default function NavBar() {
 
   async function handleSignOut() {
     await supabase.auth.signOut();
-    closeAll();
-    setUserRole(null);
     setUserEmail(null);
+    setUserRole(null);
+    closeAll();
     router.push("/login");
     router.refresh();
   }
@@ -206,20 +209,16 @@ export default function NavBar() {
 
   function DesktopAuth() {
     if (authLoading) {
-      return (
-        <div className="npr-auth-shell" aria-hidden>
-          <div className="npr-auth-loading">Loading…</div>
-        </div>
-      );
+      return <div className="npr-auth-loading">Loading…</div>;
     }
 
     if (!userEmail) {
       return (
-        <div className="npr-auth-shell">
-          <Link href="/login" className="npr-auth-link" onClick={() => closeAll()}>
+        <div className="npr-auth-group">
+          <Link href="/login" className="npr-auth-link" onClick={closeAll}>
             Log in
           </Link>
-          <Link href="/signup" className="npr-auth-link npr-auth-primary" onClick={() => closeAll()}>
+          <Link href="/signup" className="npr-auth-link npr-auth-primary" onClick={closeAll}>
             Sign up
           </Link>
         </div>
@@ -227,8 +226,8 @@ export default function NavBar() {
     }
 
     return (
-      <div className="npr-auth-shell">
-        <div className="npr-role-badge">
+      <div className="npr-auth-group">
+        <div className="npr-role-chip">
           <span className="npr-role-dot" aria-hidden />
           {userRole === "coach" ? "Coach" : userRole === "analyst" ? "Analyst" : "User"}
         </div>
@@ -247,10 +246,10 @@ export default function NavBar() {
     if (!userEmail) {
       return (
         <>
-          <Link href="/login" className="npr-mobile-link" onClick={() => closeAll()}>
+          <Link href="/login" className="npr-mobile-link" onClick={closeAll}>
             Log in
           </Link>
-          <Link href="/signup" className="npr-mobile-link npr-mobile-primary" onClick={() => closeAll()}>
+          <Link href="/signup" className="npr-mobile-link npr-mobile-primary" onClick={closeAll}>
             Sign up
           </Link>
         </>
@@ -294,27 +293,28 @@ export default function NavBar() {
           </div>
 
           <div className="npr-brand-text">
-            <Link href="/" className="npr-brand-title" onClick={() => closeAll()} style={{ textDecoration: "none" }}>
+            <Link href="/" className="npr-brand-title" onClick={closeAll} style={{ textDecoration: "none" }}>
               NBA Play Ranker
             </Link>
             <div className="npr-brand-sub">Decision Support • Explainable + AI</div>
           </div>
         </div>
 
-        {/* Desktop nav */}
-        <nav className="npr-nav" aria-label="Primary navigation">
-          {visibleLinks.map((item) => (
-            <NavLink
-              key={item.href}
-              item={item}
-              className="npr-link"
-              cta={item.href === "/gameplan"}
-            />
-          ))}
-        </nav>
+        <div className="npr-desktop-shell">
+          <nav className="npr-nav" aria-label="Primary navigation">
+            {visibleLinks.map((item) => (
+              <NavLink
+                key={item.href}
+                item={item}
+                className="npr-link"
+                cta={item.href === "/gameplan"}
+              />
+            ))}
+          </nav>
 
-        <div className="npr-desktop-auth">
-          <DesktopAuth />
+          <div className="npr-auth-wrap">
+            <DesktopAuth />
+          </div>
         </div>
 
         <button
@@ -333,7 +333,6 @@ export default function NavBar() {
         </button>
       </div>
 
-      {/* Mobile menu */}
       <div className={`npr-mobile ${mobileOpen ? "open" : ""}`} aria-label="Mobile navigation">
         {visibleLinks.map((item) => (
           <NavLink
@@ -346,16 +345,6 @@ export default function NavBar() {
         ))}
 
         <MobileAuth />
-
-        {/* Future pages (RBAC-ready) */}
-        {/*
-        <NavLink item={statisticalAnalysis} className="npr-mobile-link" block />
-        <NavLink item={shotPlan} className="npr-mobile-link" block />
-        <NavLink item={shotExplorer} className="npr-mobile-link" block />
-        <NavLink item={shotHeatmap} className="npr-mobile-link" block />
-        <NavLink item={shotModelMetrics} className="npr-mobile-link" block />
-        <NavLink item={shotStatisticalAnalysis} className="npr-mobile-link" block />
-        */}
       </div>
 
       <style jsx>{`
@@ -380,7 +369,7 @@ export default function NavBar() {
 
         .npr-bar {
           position: relative;
-          max-width: 1260px;
+          max-width: 1200px;
           margin: 0 auto;
           padding: 12px 16px;
           display: flex;
@@ -468,9 +457,19 @@ export default function NavBar() {
           letter-spacing: -0.1px;
         }
 
+        .npr-desktop-shell {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 14px;
+          flex: 1 1 auto;
+          min-width: 0;
+        }
+
         .npr-nav {
           display: flex;
           align-items: center;
+          justify-content: flex-end;
           gap: 10px;
           flex-wrap: nowrap;
           min-width: 0;
@@ -541,74 +540,76 @@ export default function NavBar() {
           left: 140%;
         }
 
-        .npr-desktop-auth {
+        .npr-auth-wrap {
           display: flex;
           align-items: center;
           justify-content: flex-end;
-          min-width: 170px;
           flex-shrink: 0;
         }
 
-        .npr-auth-shell {
+        .npr-auth-group {
           display: flex;
           align-items: center;
           gap: 10px;
         }
 
         .npr-auth-loading {
+          color: rgba(15, 23, 42, 0.72);
           padding: 10px 12px;
           border-radius: 999px;
-          font-weight: 700;
-          font-size: 13px;
-          color: rgba(15, 23, 42, 0.72);
-          background: rgba(255, 255, 255, 0.65);
+          font-weight: 750;
+          white-space: nowrap;
           border: 1px solid rgba(15, 23, 42, 0.08);
+          background: rgba(255, 255, 255, 0.55);
           box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
         }
 
         .npr-auth-link {
           appearance: none;
-          border: 1px solid rgba(15, 23, 42, 0.1);
-          background: rgba(255, 255, 255, 0.75);
+          border: 1px solid rgba(15, 23, 42, 0.12);
+          background: rgba(255, 255, 255, 0.72);
           color: rgba(15, 23, 42, 0.9);
           padding: 10px 12px;
           border-radius: 999px;
           font-weight: 800;
           line-height: 1;
           text-decoration: none;
+          white-space: nowrap;
           cursor: pointer;
           box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
           transition: background 160ms ease, border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
         }
 
         .npr-auth-link:hover {
-          background: rgba(255, 255, 255, 0.96);
+          background: rgba(255, 255, 255, 0.95);
           border-color: rgba(29, 66, 138, 0.18);
           transform: translateY(-1px);
           box-shadow: 0 14px 26px rgba(15, 23, 42, 0.1);
         }
 
         .npr-auth-primary {
-          background: linear-gradient(135deg, #1d428a 0%, #2563eb 48%, #7c3aed 100%);
+          background: linear-gradient(135deg, #1d428a 0%, #2563eb 55%, #7c3aed 100%);
           color: #fff;
-          border-color: rgba(255, 255, 255, 0.18);
+          border: 1px solid rgba(255, 255, 255, 0.24);
         }
 
         .npr-auth-primary:hover {
-          filter: brightness(1.04);
+          filter: brightness(1.05) saturate(1.04);
+          border-color: rgba(255, 255, 255, 0.34);
         }
 
-        .npr-role-badge {
+        .npr-role-chip {
           display: inline-flex;
           align-items: center;
           gap: 8px;
           padding: 10px 12px;
           border-radius: 999px;
-          font-weight: 850;
-          font-size: 13px;
-          color: #0f172a;
-          background: rgba(255, 255, 255, 0.75);
+          font-weight: 800;
+          line-height: 1;
+          color: rgba(15, 23, 42, 0.9);
+          white-space: nowrap;
           border: 1px solid rgba(15, 23, 42, 0.08);
+          background: rgba(255, 255, 255, 0.6);
           box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
         }
 
@@ -616,8 +617,8 @@ export default function NavBar() {
           width: 8px;
           height: 8px;
           border-radius: 999px;
-          background: linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ec4899 100%);
-          box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+          background: linear-gradient(135deg, #2563eb 0%, #7c3aed 55%, #ec4899 100%);
+          box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
         }
 
         .npr-burger {
@@ -628,6 +629,7 @@ export default function NavBar() {
           padding: 10px;
           cursor: pointer;
           box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+          flex-shrink: 0;
         }
 
         .npr-burger span {
@@ -668,40 +670,49 @@ export default function NavBar() {
           background: rgba(255, 255, 255, 0.95);
         }
 
+        .npr-mobile-primary {
+          background: linear-gradient(135deg, #1d428a 0%, #2563eb 55%, #7c3aed 100%);
+          color: #fff;
+          border: 1px solid rgba(255, 255, 255, 0.24);
+        }
+
         .npr-mobile-button {
           appearance: none;
           text-align: left;
           cursor: pointer;
         }
 
-        .npr-mobile-primary {
-          background: linear-gradient(135deg, #1d428a 0%, #2563eb 48%, #7c3aed 100%);
-          color: #fff;
-          border-color: rgba(255, 255, 255, 0.18);
-        }
-
         .npr-mobile-meta {
-          margin-top: 10px;
-          padding: 12px 14px;
+          margin-top: 8px;
+          padding: 12px 12px;
           border-radius: 16px;
           font-weight: 800;
-          font-size: 14px;
-          color: rgba(15, 23, 42, 0.78);
-          background: rgba(255, 255, 255, 0.72);
-          border: 1px solid rgba(15, 23, 42, 0.08);
+          color: rgba(15, 23, 42, 0.82);
+          background: rgba(255, 255, 255, 0.7);
+          border: 1px solid rgba(15, 23, 42, 0.1);
           box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
         }
 
         @media (max-width: 1180px) {
-          .npr-link {
-            padding: 10px 10px;
+          .npr-link,
+          .npr-auth-link,
+          .npr-role-chip,
+          .npr-auth-loading {
+            padding: 10px 11px;
             font-size: 14px;
+          }
+
+          .npr-nav {
+            gap: 8px;
+          }
+
+          .npr-auth-group {
+            gap: 8px;
           }
         }
 
         @media (max-width: 980px) {
-          .npr-nav,
-          .npr-desktop-auth {
+          .npr-desktop-shell {
             display: none;
           }
 
