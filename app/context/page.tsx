@@ -2,7 +2,7 @@
 //
 // Context Simulator (Coach-friendly)
 //
-// UI goals (per your wireframes):
+// UI goals (per wireframes):
 // - Simple “inputs → run → top-K results” flow.
 // - Keep page feeling like a finished coach tool.
 // - Hide *all* explanations / technical info behind a “More info” dropdown at the bottom.

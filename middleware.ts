@@ -1,0 +1,109 @@
+import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
+
+type UserRole = "coach" | "analyst" | null;
+
+const signedInOnly = ["/glossary"];
+
+const coachOnly = ["/matchup", "/context", "/gameplan"];
+
+const analystOnly = [
+  "/data-explorer",
+  "/model-metrics",
+  "/statistical-analysis",
+  "/shot-explorer",
+  "/shot-heatmap",
+  "/shot-model-metrics",
+  "/shot-statistical-analysis",
+  "/shot-plan",
+];
+
+function matchesRoute(pathname: string, routes: string[]) {
+  return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+}
+
+function defaultPathForRole(role: UserRole) {
+  if (role === "coach") return "/matchup";
+  if (role === "analyst") return "/data-explorer";
+  return "/";
+}
+
+export async function middleware(request: NextRequest) {
+  let response = NextResponse.next({ request });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          response = NextResponse.next({ request });
+          cookiesToSet.forEach(({ name, value, options }) => {
+            response.cookies.set(name, value, options);
+          });
+        },
+      },
+    }
+  );
+
+  const path = request.nextUrl.pathname;
+  const isAuthPage = path === "/login" || path === "/signup";
+
+  const requiresAuth =
+    matchesRoute(path, signedInOnly) ||
+    matchesRoute(path, coachOnly) ||
+    matchesRoute(path, analystOnly);
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user && requiresAuth) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("next", `${path}${request.nextUrl.search}`);
+    return NextResponse.redirect(url);
+  }
+
+  if (!user) {
+    return response;
+  }
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  const metadataRole =
+    user.user_metadata?.role === "coach" || user.user_metadata?.role === "analyst"
+      ? (user.user_metadata.role as UserRole)
+      : null;
+
+  const role = ((profile?.role as UserRole | undefined) ?? metadataRole ?? null) as UserRole;
+
+  if (isAuthPage) {
+    const url = request.nextUrl.clone();
+    url.pathname = defaultPathForRole(role);
+    url.searchParams.delete("next");
+    return NextResponse.redirect(url);
+  }
+
+  if (matchesRoute(path, coachOnly) && role !== "coach") {
+    return NextResponse.redirect(new URL(defaultPathForRole(role), request.url));
+  }
+
+  if (matchesRoute(path, analystOnly) && role !== "analyst") {
+    return NextResponse.redirect(new URL(defaultPathForRole(role), request.url));
+  }
+
+  return response;
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+};
