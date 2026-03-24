@@ -1,21 +1,7 @@
-// app/data-explorer/page.tsx
+// app/ui/data-explorer/DataExplorerClient.tsx
 //
-// Data Explorer
-// I built this page as a “show your work” screen for the project.
-// It lets anyone (especially the committee) see the CLEANED, TEAM-LEVEL table we actually use,
-// filter it, and export it to CSV for their own Excel/R/Python checks.
-//
-// What this page is NOT:
-// - No predictions.
-// - No recommender output.
-// - No “magic numbers” that can’t be traced back to a dataset.
-//
-// Why I’m keeping this in the app (defense reason):
-// - Proves we have real data.
-// - Proves we’re doing a cleaning + aggregation step (player rows → team rows).
-// - Lets reviewers export the exact same filtered table we’re looking at here.
-// - Builds trust that the recommenders are based on sound data engineering.
-// - Helps Analysts do their own analysis outside the app if they want to.
+// Data Explorer UI subsystem component
+// Extracted from the page for better architecture organization
 
 "use client";
 
