@@ -12,7 +12,7 @@ from shot_etl import CLEAN_PARQUET
 # Paths
 # ---------------------------------------------------------------------
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
 PBP_DIR = DATA_DIR / "pbp"
 AGG_PARQUET = PBP_DIR / "shots_agg.parquet"
 

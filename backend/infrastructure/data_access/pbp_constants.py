@@ -16,7 +16,7 @@ from pathlib import Path
 # Base paths
 # ---------------------------------------------------------------------
 
-BACKEND_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BACKEND_DIR / "data"
 PBP_DIR = DATA_DIR / "pbp"
 CACHE_DIR = PBP_DIR / "cache"

@@ -32,7 +32,7 @@ from baseline_recommender import BaselineRecommender
 # 1) File locations (relative to backend/)
 # ------------------------------------------------------------
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 # Raw Synergy snapshot pulled via R/hoopR script:
 # backend/data/etl/build_synergy_dataset.R

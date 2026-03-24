@@ -13,7 +13,7 @@ from shot_config import normalize_shot_type, season_int_to_str, zone_from_xy
 # Paths (relative to backend/)
 # ---------------------------------------------------------------------
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
 PBP_DIR = DATA_DIR / "pbp"
 SOURCE_PARQUET = PBP_DIR / "nba_pbp_2021_present.parquet"
 ALT_SOURCE_PARQUET = DATA_DIR / "nba_pbp_2021_present.parquet"

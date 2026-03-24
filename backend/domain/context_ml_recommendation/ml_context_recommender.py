@@ -29,13 +29,13 @@ from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 
-from baseline_recommender import BaselineRecommender
+from ..baseline_recommendation.baseline_recommender import BaselineRecommender
 
 # ---------------------------------------------------------------------
 # Data paths
 # ---------------------------------------------------------------------
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
 SYNERGY_CSV_PATH = DATA_DIR / "synergy_playtypes_2019_2025_players.csv"
 ML_PRED_PATH = DATA_DIR / "ml_offense_ppp_predictions.csv"
 

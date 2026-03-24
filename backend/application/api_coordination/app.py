@@ -40,15 +40,15 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from baseline_recommender import BaselineRecommender, rank_playtypes_baseline
-from shot_baseline_recommender import ShotBaselineRecommender
-from shot_etl import CLEAN_PARQUET
-from ml_models import paired_t_test_rmse, run_cv_evaluation
-from ml_stat_analysis import compute_ml_analysis
-from shot_ml_models import run_shot_model_cv
-from shot_ml_stat_analysis import compute_shot_ml_analysis
+from domain.baseline_recommendation.baseline_recommender import BaselineRecommender, rank_playtypes_baseline
+from domain.baseline_recommendation.shot_baseline_recommender import ShotBaselineRecommender
+from domain.shot_analysis.shot_etl import CLEAN_PARQUET
+from infrastructure.model_management.ml_models import paired_t_test_rmse, run_cv_evaluation
+from domain.statistical_analysis.ml_stat_analysis import compute_ml_analysis
+from domain.shot_analysis.shot_ml_models import run_shot_model_cv
+from domain.shot_analysis.shot_ml_stat_analysis import compute_shot_ml_analysis
 
-from export_pdf import create_pdf_router
+from infrastructure.visualization_and_export.export_pdf import create_pdf_router
 
 # IMPORTANT:
 # Do NOT import viz_sportypy here at module load time.
@@ -77,7 +77,7 @@ app = FastAPI(
 # If /pbp modules have an import error, we still want play type pages working.
 # ---------------------------------------------------------------------
 try:
-    from pbp_endpoints import router as pbp_router  # type: ignore
+    from infrastructure.data_access.pbp_endpoints import router as pbp_router  # type: ignore
 
     app.include_router(pbp_router)
     logger.info("Loaded Dataset2 (/pbp) router successfully.")
@@ -111,7 +111,7 @@ except Exception as e:
 # This keeps Dataset1 stable and avoids changing your existing pbp_endpoints.
 # ---------------------------------------------------------------------
 try:
-    from pbp_shots_endpoints import router as pbp_shots_router  # type: ignore
+    from infrastructure.data_access.pbp_shots import router as pbp_shots_router  # type: ignore
 
     app.include_router(pbp_shots_router)
     logger.info("Loaded Dataset2 (/pbp) shots explorer endpoints successfully.")
@@ -127,7 +127,7 @@ except Exception as e:
 # If NLP modules have an import error, core playtype + shot endpoints must still work.
 # ---------------------------------------------------------------------
 try:
-    from nlp_endpoints import router as nlp_router  # type: ignore
+    from infrastructure.external_integrations.nlp_endpoints import router as nlp_router  # type: ignore
 
     app.include_router(nlp_router)
     logger.info("Loaded NLP (/nlp) router successfully.")
@@ -158,7 +158,7 @@ app.add_middleware(
 # Startup cache (important for multi-user + performance)
 # ---------------------------------------------------------------------
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
 SYNERGY_CSV = DATA_DIR / "synergy_playtypes_2019_2025_players.csv"
 ML_PRED_CSV = DATA_DIR / "ml_offense_ppp_predictions.csv"
 
@@ -808,7 +808,7 @@ def viz_playtype_zones(
 
     # Lazy-import viz module so backend can start even if SportyPy deps are missing
     try:
-        from viz_sportypy import render_playtype_zone_png, png_bytes_to_base64
+        from infrastructure.visualization_and_export.viz_sportypy import render_playtype_zone_png, png_bytes_to_base64
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -895,7 +895,7 @@ def viz_shot_heatmap(
 ) -> Dict[str, Any]:
     # Lazy import to avoid SportyPy import issues at startup
     try:
-        from viz_shot_heatmap import render_shot_heatmap_png, png_bytes_to_base64
+        from infrastructure.visualization_and_export.viz_shot_heatmap import render_shot_heatmap_png, png_bytes_to_base64
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -932,7 +932,7 @@ def export_shotplan_pdf(
     zone: Optional[str] = Query(None),
 ) -> StreamingResponse:
     try:
-        from export_shotplan_pdf import build_shotplan_pdf
+        from infrastructure.visualization_and_export.export_shotplan_pdf import build_shotplan_pdf
     except Exception as e:
         raise HTTPException(
             status_code=500,
