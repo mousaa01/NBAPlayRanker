@@ -1,8 +1,8 @@
-# backend/ml_stat_analysis.py
-
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -25,6 +25,47 @@ class _Cache:
 
 
 _CACHE: Optional[_Cache] = None
+
+ANALYSIS_CACHE_PATH = Path(__file__).resolve().parent / "data" / "cache" / "ml_analysis_cache.json"
+SCHEMA_VERSION = "ml_analysis_v2"
+
+
+def _read_disk_cache(n_splits: int, min_poss: int) -> Optional[Dict[str, Any]]:
+    try:
+        if not ANALYSIS_CACHE_PATH.exists():
+            return None
+
+        raw = json.loads(ANALYSIS_CACHE_PATH.read_text(encoding="utf-8"))
+
+        if raw.get("schema_version") != SCHEMA_VERSION:
+            return None
+        if int(raw.get("n_splits", -1)) != int(n_splits):
+            return None
+        if int(raw.get("min_poss", -1)) != int(min_poss):
+            return None
+
+        payload = raw.get("payload")
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def _write_disk_cache(n_splits: int, min_poss: int, payload: Dict[str, Any]) -> None:
+    try:
+        ANALYSIS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ANALYSIS_CACHE_PATH.write_text(
+            json.dumps(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "n_splits": int(n_splits),
+                    "min_poss": int(min_poss),
+                    "payload": payload,
+                }
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def _summary_stats(x: np.ndarray) -> Dict[str, float]:
@@ -121,8 +162,15 @@ def compute_ml_analysis(
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
     global _CACHE
+
     if _CACHE and not force_refresh and _CACHE.n_splits == n_splits and _CACHE.min_poss == min_poss:
         return _CACHE.payload
+
+    if not force_refresh:
+        disk_payload = _read_disk_cache(n_splits=n_splits, min_poss=min_poss)
+        if disk_payload:
+            _CACHE = _Cache(n_splits=n_splits, min_poss=min_poss, payload=disk_payload)
+            return disk_payload
 
     off = team_df[team_df["SIDE"] == "offense"].copy()
 
@@ -165,7 +213,39 @@ def compute_ml_analysis(
     X = df[FEATURE_COLS].to_numpy(dtype=float)
     y = df[TARGET_COL].to_numpy(dtype=float)
     groups = df["SEASON"].astype(str).to_numpy()
-    gkf = GroupKFold(n_splits=min(n_splits, df["SEASON"].nunique()))
+
+    n_unique_seasons = int(df["SEASON"].nunique())
+    actual_splits = min(n_splits, n_unique_seasons)
+
+    if actual_splits < 2:
+        payload = {
+            "dataset": dataset,
+            "eda": eda,
+            "correlations": correlations,
+            "target_feature_corr": target_corr,
+            "feature_selection": {
+                "correlation_filter": corr_prune,
+                "select_k_best": {"k": 0, "selected": [], "scores": []},
+                "rfe": {"selected": [], "ranking": []},
+            },
+            "model_selection": {
+                "tuning": {
+                    "cv": "Not enough distinct seasons for GroupKFold tuning.",
+                    "features_used": corr_prune["kept"] if corr_prune.get("kept") else FEATURE_COLS,
+                    "ridge": None,
+                    "random_forest": None,
+                    "gradient_boosting": None,
+                },
+                "notes": [
+                    "Statistical analysis loaded, but tuning was skipped because fewer than 2 distinct seasons were available after filtering.",
+                ],
+            },
+        }
+        _write_disk_cache(n_splits=n_splits, min_poss=min_poss, payload=payload)
+        _CACHE = _Cache(n_splits=n_splits, min_poss=min_poss, payload=payload)
+        return payload
+
+    gkf = GroupKFold(n_splits=actual_splits)
 
     skb = SelectKBest(score_func=f_regression, k=min(6, X.shape[1]))
     skb.fit(X, y)
@@ -173,7 +253,6 @@ def compute_ml_analysis(
     skb_scores.sort(key=lambda r: r["score"], reverse=True)
     skb_selected = [FEATURE_COLS[i] for i, keep in enumerate(skb.get_support()) if keep]
 
-    # RFE (wrapper method)
     scaler = StandardScaler()
     Xs = scaler.fit_transform(X)
     rfe = RFE(estimator=Ridge(alpha=1.0), n_features_to_select=min(6, len(FEATURE_COLS)))
@@ -187,7 +266,6 @@ def compute_ml_analysis(
         "rfe": {"selected": rfe_selected, "ranking": sorted(rfe_ranking, key=lambda r: r["rank"])},
     }
 
-    # Model selection + tuning
     model_features = corr_prune["kept"] if corr_prune.get("kept") else FEATURE_COLS
     X_m = df[model_features].to_numpy(dtype=float)
 
@@ -197,25 +275,28 @@ def compute_ml_analysis(
         param_grid={"model__alpha": [0.1, 1.0, 10.0, 50.0]},
         scoring="neg_root_mean_squared_error",
         cv=gkf,
-        n_jobs=-1,
+        n_jobs=1,
+        pre_dispatch=1,
     )
     ridge_search.fit(X_m, y, groups=groups)
 
     rf_search = GridSearchCV(
-        RandomForestRegressor(),
-        param_grid={"n_estimators": [250], "min_samples_leaf": [2, 5], "max_depth": [None, 10]},
+        RandomForestRegressor(random_state=42, n_jobs=1),
+        param_grid={"n_estimators": [150], "min_samples_leaf": [2, 5], "max_depth": [None, 10]},
         scoring="neg_root_mean_squared_error",
         cv=gkf,
-        n_jobs=-1,
+        n_jobs=1,
+        pre_dispatch=1,
     )
     rf_search.fit(X_m, y, groups=groups)
 
     gbr_search = GridSearchCV(
-        GradientBoostingRegressor(),
-        param_grid={"n_estimators": [200, 400], "learning_rate": [0.05, 0.1], "max_depth": [2, 3]},
+        GradientBoostingRegressor(random_state=42),
+        param_grid={"n_estimators": [150, 250], "learning_rate": [0.05, 0.1], "max_depth": [2, 3]},
         scoring="neg_root_mean_squared_error",
         cv=gkf,
-        n_jobs=-1,
+        n_jobs=1,
+        pre_dispatch=1,
     )
     gbr_search.fit(X_m, y, groups=groups)
 
@@ -226,11 +307,24 @@ def compute_ml_analysis(
             "best_params": {"alpha": float(ridge_search.best_params_["model__alpha"])},
             "best_rmse": float(-ridge_search.best_score_),
         },
-        "random_forest": {"best_params": rf_search.best_params_, "best_rmse": float(-rf_search.best_score_)},
-        "gradient_boosting": {"best_params": gbr_search.best_params_, "best_rmse": float(-gbr_search.best_score_)},
+        "random_forest": {
+            "best_params": {
+                "n_estimators": int(rf_search.best_params_["n_estimators"]),
+                "min_samples_leaf": int(rf_search.best_params_["min_samples_leaf"]),
+                "max_depth": None if rf_search.best_params_["max_depth"] is None else int(rf_search.best_params_["max_depth"]),
+            },
+            "best_rmse": float(-rf_search.best_score_),
+        },
+        "gradient_boosting": {
+            "best_params": {
+                "n_estimators": int(gbr_search.best_params_["n_estimators"]),
+                "learning_rate": float(gbr_search.best_params_["learning_rate"]),
+                "max_depth": int(gbr_search.best_params_["max_depth"]),
+            },
+            "best_rmse": float(-gbr_search.best_score_),
+        },
     }
 
-    # ✅ NEW: add notes explaining tuning vs holdout to avoid committee confusion
     payload = {
         "dataset": dataset,
         "eda": eda,
@@ -248,5 +342,6 @@ def compute_ml_analysis(
         },
     }
 
+    _write_disk_cache(n_splits=n_splits, min_poss=min_poss, payload=payload)
     _CACHE = _Cache(n_splits=n_splits, min_poss=min_poss, payload=payload)
     return payload
