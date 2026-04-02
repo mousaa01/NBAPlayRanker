@@ -1,11 +1,4 @@
-// app/gameplan/GameplanClient.tsx
-//
-// Gameplan (Client):
-// - Coach-friendly “set the situation → get top options → see visuals/counters → build a plan” flow.
-// - Combines Dataset1 (play-type rankings + play zones viz) + Dataset2 (shot plan + heatmap + PDF).
-// - NLP is optional: it can parse a natural-language situation and produce short explanations.
-// - UI stores plan/notes/roles locally (localStorage) so the demo is smooth.
-// - IMPORTANT: This file does not change backend behavior — it only calls existing endpoints via ../utils.
+// Gameplan page UI.
 
 "use client";
 
@@ -21,7 +14,7 @@ import {
   fetchShotPlanRank,
   getShotPlanPdfUrl,
   type MetaOptions,
-} from "../utils";
+} from "../../../utils";
 
 type TeamOption = { code: string; name?: string };
 

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "../../../lib/supabase/client";
+import { createClient } from "../../../../lib/supabase/client";
 
 type UserRole = "coach" | "analyst";
 
@@ -183,7 +183,7 @@ function LoginPageFallback() {
   );
 }
 
-export default function LoginPage() {
+export default function LoginPageClient() {
   return (
     <Suspense fallback={<LoginPageFallback />}>
       <LoginPageContent />

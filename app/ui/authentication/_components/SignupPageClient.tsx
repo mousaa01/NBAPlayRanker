@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { createClient } from "../../../lib/supabase/client";
+import { createClient } from "../../../../lib/supabase/client";
 
 type Role = "coach" | "analyst";
 
-export default function SignupPage() {
+export default function SignupPageClient() {
   const supabase = useMemo(() => createClient(), []);
 
   const [email, setEmail] = useState("");
