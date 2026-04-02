@@ -10,3 +10,4 @@ pillow
 reportlab
 sportypy
 pytest
+httpx
