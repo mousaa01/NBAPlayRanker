@@ -22,8 +22,8 @@ from typing import Optional
 
 import pandas as pd
 
-from pbp_constants import CANONICAL_PARQUET
-from pbp_loader import get_pbp_canonical_df
+from .pbp_constants import CANONICAL_PARQUET
+from .pbp_loader import get_pbp_canonical_df
 
 
 @lru_cache(maxsize=4)

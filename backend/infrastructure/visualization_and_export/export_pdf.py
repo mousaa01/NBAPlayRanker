@@ -29,7 +29,7 @@ from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from baseline_recommender import BaselineRecommender, rank_playtypes_baseline
+from domain.baseline_recommendation.baseline_recommender import BaselineRecommender, rank_playtypes_baseline
 
 
 def _require_in(value: str, allowed: Set[str], label: str) -> None:
@@ -115,7 +115,7 @@ def create_pdf_router(
 
         # Render SportyPy PNG
         try:
-            from viz_sportypy import render_playtype_zone_png
+            from infrastructure.visualization_and_export.viz_sportypy import render_playtype_zone_png
         except Exception as e:
             raise HTTPException(
                 status_code=500,

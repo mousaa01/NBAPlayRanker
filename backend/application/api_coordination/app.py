@@ -89,40 +89,6 @@ except Exception as e:
     )
 
 # ---------------------------------------------------------------------
-# IMPORTANT ADDITION:
-# Your frontend is calling:
-#   /pbp/shots/preview
-#   /pbp/shots.csv
-#
-# Your logs show /pbp/meta/options is working (200), but /pbp/shots/preview was 404.
-# That means your current /pbp router does NOT define the shots explorer endpoints.
-#
-# Fix (safe + non-breaking):
-# - We optionally mount a SECOND router that *only* adds the missing shots endpoints.
-# - If you haven't created backend/pbp_shots_endpoints.py yet, this block is a no-op.
-#
-# Create this file (recommended):
-#   backend/pbp_shots_endpoints.py
-# with:
-#   router = APIRouter(prefix="/pbp", tags=["pbp"])
-#   @router.get("/shots/preview") ...
-#   @router.get("/shots.csv") ...
-#
-# This keeps Dataset1 stable and avoids changing your existing pbp_endpoints.
-# ---------------------------------------------------------------------
-try:
-    from infrastructure.data_access.pbp_shots import router as pbp_shots_router  # type: ignore
-
-    app.include_router(pbp_shots_router)
-    logger.info("Loaded Dataset2 (/pbp) shots explorer endpoints successfully.")
-except Exception as e:
-    logger.warning(
-        "Dataset2 (/pbp) shots explorer router NOT loaded (this is ok if you haven't created it yet): %s. "
-        "Core endpoints will still work.",
-        e,
-    )
-
-# ---------------------------------------------------------------------
 # IMPORTANT: NLP router should NOT be able to break startup either.
 # If NLP modules have an import error, core playtype + shot endpoints must still work.
 # ---------------------------------------------------------------------

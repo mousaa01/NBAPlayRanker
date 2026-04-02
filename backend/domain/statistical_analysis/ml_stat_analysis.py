@@ -14,7 +14,7 @@ from sklearn.model_selection import GroupKFold, GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from ml_models import FEATURE_COLS, TARGET_COL
+from infrastructure.model_management.ml_models import FEATURE_COLS, TARGET_COL
 
 
 @dataclass
@@ -85,12 +85,12 @@ def _correlation_prune(
         cols = [c for c in feature_cols if c in kept]
         if len(cols) < 2:
             break
-        cmat = corr.loc[cols, cols].copy()
-        np.fill_diagonal(cmat.values, 0.0)
-        max_val = float(cmat.to_numpy().max())
+        cmat = corr.loc[cols, cols].to_numpy(copy=True)
+        np.fill_diagonal(cmat, 0.0)
+        max_val = float(cmat.max())
         if max_val <= threshold:
             break
-        idx = np.unravel_index(np.argmax(cmat.to_numpy()), cmat.shape)
+        idx = np.unravel_index(np.argmax(cmat),cmat.shape)
         f1, f2 = cols[idx[0]], cols[idx[1]]
         drop = f2 if abs_target.get(f1, 0.0) >= abs_target.get(f2, 0.0) else f1
         if drop in kept:

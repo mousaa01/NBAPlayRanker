@@ -22,7 +22,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
-from pbp_constants import (
+from .pbp_constants import (
     ALT_SOURCE_PARQUET,
     CACHE_DIR,
     CANONICAL_META_JSON,
@@ -31,7 +31,7 @@ from pbp_constants import (
     CLEAN_PARQUET,
     SOURCE_PARQUET,
 )
-from pbp_cache import (
+from .pbp_cache import (
     build_meta,
     cache_valid,
     ensure_dir,
@@ -84,7 +84,7 @@ def ensure_clean_parquet(*, force_rebuild: bool = False) -> Path:
     if CLEAN_PARQUET.exists() and not force_rebuild:
         return CLEAN_PARQUET
 
-    from shot_etl import build_shots_dataset
+    from domain.shot_analysis.shot_etl import build_shots_dataset
 
     src = _resolve_source_parquet()
     ensure_dir(CLEAN_PARQUET.parent)

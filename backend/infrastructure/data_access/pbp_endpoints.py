@@ -8,13 +8,13 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
-from pbp_shots import get_shots_csv_response, get_shots_json
-from pbp_shotplan import get_shotplan_json, get_shotplan_meta_options
-from pbp_viz import render_pbp_heatmap_base64
+from .pbp_shots import get_shots_csv_response, get_shots_json
+from .pbp_shotplan import get_shotplan_json, get_shotplan_meta_options
+from .pbp_viz import render_pbp_heatmap_base64
 
 router = APIRouter(prefix="/pbp", tags=["pbp"])
 
-from pbp_phase2_endpoints import router as pbp_phase2_router
+from .pbp_phase2_endpoints import router as pbp_phase2_router
 router.include_router(pbp_phase2_router)
 
 
@@ -57,6 +57,30 @@ def pbp_data_shots(
     return jsonable_encoder(payload)
 
 
+# Compatibility alias: frontend pages call /pbp/shots/preview.
+@router.get("/shots/preview")
+def pbp_shots_preview(
+    season: str = Query(..., description="Season like 2021-22"),
+    team: str = Query("", description="Team abbreviation (our team) like TOR"),
+    opp: Optional[str] = Query(None, description="Opponent abbreviation like BOS"),
+    shot_type: Optional[str] = Query(None, description="Optional shot type filter"),
+    shotType: Optional[str] = Query(None, description="Optional shot type filter alias"),
+    zone: Optional[str] = Query(None, description="Optional zone filter"),
+    limit: int = Query(50, ge=1, le=5000),
+    our: Optional[str] = Query(None, description="Alias for team"),
+) -> Dict[str, Any]:
+    our_team = team or our or ""
+    payload = get_shots_json(
+        season=season,
+        team=our_team,
+        opp=opp,
+        shot_type=shot_type or shotType,
+        zone=zone,
+        limit=int(limit),
+    )
+    return jsonable_encoder(payload)
+
+
 @router.get("/data/shots.csv")
 def pbp_data_shots_csv(
     season: str = Query(...),
@@ -71,6 +95,29 @@ def pbp_data_shots_csv(
         team=team,
         opp=opp,
         shot_type=shot_type,
+        zone=zone,
+        limit=int(limit),
+    )
+
+
+# Compatibility alias: frontend pages call /pbp/shots.csv.
+@router.get("/shots.csv")
+def pbp_shots_csv(
+    season: str = Query(...),
+    team: str = Query(""),
+    opp: Optional[str] = Query(None),
+    shot_type: Optional[str] = Query(None),
+    shotType: Optional[str] = Query(None),
+    zone: Optional[str] = Query(None),
+    limit: int = Query(5000, ge=1, le=200000),
+    our: Optional[str] = Query(None),
+) -> StreamingResponse:
+    our_team = team or our or ""
+    return get_shots_csv_response(
+        season=season,
+        team=our_team,
+        opp=opp,
+        shot_type=shot_type or shotType,
         zone=zone,
         limit=int(limit),
     )

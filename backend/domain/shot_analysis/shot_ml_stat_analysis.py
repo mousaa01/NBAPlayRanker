@@ -32,9 +32,9 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_selection import SelectKBest, f_regression
 
-from pbp_cache import build_meta, cache_valid, fingerprint_file, read_json, write_json_atomic
-from pbp_constants import CACHE_DIR, CLEAN_PARQUET
-from shot_ml_models import get_feature_spec, load_shots_for_ml
+from infrastructure.data_access.pbp_cache import build_meta, cache_valid, fingerprint_file, read_json, write_json_atomic
+from infrastructure.data_access.pbp_constants import CACHE_DIR, CLEAN_PARQUET
+from domain.shot_analysis.shot_ml_models import get_feature_spec, load_shots_for_ml
 
 
 ANALYSIS_CACHE_PATH = CACHE_DIR / "shot_ml_analysis_cache.json"

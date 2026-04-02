@@ -8,8 +8,8 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from fastapi import HTTPException
 
-from pbp_constants import CANONICAL_PARQUET
-from pbp_io import read_parquet_cached
+from .pbp_constants import CANONICAL_PARQUET
+from .pbp_io import read_parquet_cached
 
 
 @dataclass
@@ -67,7 +67,9 @@ def render_pbp_heatmap_png(
     """
     # Lazy import so the backend can boot even if sportypy isn't installed.
     try:
-        from viz_shot_heatmap import render_shot_heatmap_png  # type: ignore
+        from infrastructure.visualization_and_export.viz_shot_heatmap import (
+            render_shot_heatmap_png,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -135,7 +137,9 @@ def render_pbp_heatmap_json(
     Returns { ... , image_base64 } for UI usage.
     """
     try:
-        from viz_shot_heatmap import png_bytes_to_base64  # type: ignore
+        from infrastructure.visualization_and_export.viz_shot_heatmap import (
+            png_bytes_to_base64,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,

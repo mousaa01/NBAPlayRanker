@@ -35,7 +35,7 @@ from sklearn.model_selection import GroupKFold, KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from pbp_constants import CLEAN_PARQUET
+from infrastructure.data_access.pbp_constants import CLEAN_PARQUET
 
 
 # -----------------------------------------------------------------------------

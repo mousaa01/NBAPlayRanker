@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 # This file loads the canonical parquet once per backend process,
 # then serves filters quickly without re-reading from disk on every request.
 
-_BACKEND_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
 _CACHE_DIR = _BACKEND_DIR / "data" / "pbp" / "cache"
 
 # This is the canonical parquet produced by your pipeline step.

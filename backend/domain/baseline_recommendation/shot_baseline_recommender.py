@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from shot_aggregates import AGG_PARQUET
+from domain.shot_analysis.shot_aggregates import AGG_PARQUET
 
 LEAGUE_PARQUET = AGG_PARQUET.with_name("shots_agg_league.parquet")
 

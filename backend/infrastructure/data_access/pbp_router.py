@@ -19,7 +19,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
-from pbp_shots import (
+from .pbp_shots import (
     get_meta_options,
     get_shots_csv_response,
     get_shots_json,

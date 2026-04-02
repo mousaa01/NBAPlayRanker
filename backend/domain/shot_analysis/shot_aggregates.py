@@ -6,7 +6,7 @@ from typing import Dict, Iterable, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from shot_etl import CLEAN_PARQUET
+from domain.shot_analysis.shot_etl import CLEAN_PARQUET
 
 # ---------------------------------------------------------------------
 # Paths

@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from shot_baseline_recommender import ShotBaselineRecommender
+from domain.baseline_recommendation.shot_baseline_recommender import ShotBaselineRecommender
 
 # Singleton (fast startup + no repeated parquet reads)
 _REC: Optional[ShotBaselineRecommender] = None

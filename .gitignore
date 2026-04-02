@@ -4,6 +4,10 @@ venv/
 env/
 ENV/
 backend/.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
 # --- Node / frontend dependencies ---
 node_modules/
@@ -27,3 +31,5 @@ backend/data/pbp/*.parquet
 # Large datasets / artifacts
 backend/data/pbp/*.parquet
 *.zip
+
+/Notebook

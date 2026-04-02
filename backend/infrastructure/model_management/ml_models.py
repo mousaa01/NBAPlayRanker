@@ -41,14 +41,14 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from baseline_recommender import BaselineRecommender
+from domain.baseline_recommendation.baseline_recommender import BaselineRecommender
 
 # ------------------------------------------------------------------
 # Config
 # ------------------------------------------------------------------
 
-DATA_CSV_PATH = Path(__file__).parent / "data" / "synergy_playtypes_2019_2025_players.csv"
-DEFAULT_OUTPUT_PATH = Path(__file__).parent / "data" / "ml_offense_ppp_predictions.csv"
+DATA_CSV_PATH = Path(__file__).parent.parent.parent / "data" / "synergy_playtypes_2019_2025_players.csv"
+DEFAULT_OUTPUT_PATH = Path(__file__).parent.parent.parent / "data" / "ml_offense_ppp_predictions.csv"
 
 # Feature set for team-level OFFENSE rows.
 FEATURE_COLS = [

@@ -10,13 +10,13 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 
-from shot_ml_models import run_shot_model_cv
-from shot_ml_stat_analysis import compute_shot_ml_analysis
+from domain.shot_analysis.shot_ml_models import run_shot_model_cv
+from domain.shot_analysis.shot_ml_stat_analysis import compute_shot_ml_analysis
 
 router = APIRouter(tags=["pbp-phase2"])
 
 # Keep Dataset2 caches here (per your project rules)
-CACHE_DIR = Path(__file__).parent / "data" / "pbp" / "cache"
+CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "pbp" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 ANALYSIS_CACHE = CACHE_DIR / "pbp_phase2_shot_ml_analysis.json"

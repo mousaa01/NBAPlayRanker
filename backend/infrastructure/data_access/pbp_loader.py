@@ -18,9 +18,9 @@ from typing import Optional
 
 import pandas as pd
 
-from pbp_constants import CANONICAL_META_JSON, CANONICAL_PARQUET
-from pbp_cache import read_json
-from pbp_clean import ensure_canonical_parquet
+from .pbp_constants import CANONICAL_META_JSON, CANONICAL_PARQUET
+from .pbp_cache import read_json
+from .pbp_clean import ensure_canonical_parquet
 
 
 _CANONICAL_DF: Optional[pd.DataFrame] = None

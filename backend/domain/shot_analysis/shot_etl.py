@@ -7,7 +7,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from shot_config import normalize_shot_type, season_int_to_str, zone_from_xy
+from domain.shot_analysis.shot_config import normalize_shot_type, season_int_to_str, zone_from_xy
 
 # ---------------------------------------------------------------------
 # Paths (relative to backend/)
