@@ -1,48 +1,27 @@
-# backend/nlp_endpoints.py
+"""NLP router: parse natural-language game context and explain recommendations."""
 from __future__ import annotations
-
-"""
-FastAPI router for Natural Language Processing features:
-
-- POST /nlp/parse
-    Converts a natural-language situation into structured game context
-    (period, time_remaining, margin) + optional extra fields.
-
-- POST /nlp/explain
-    Produces deterministic, metrics-backed explanations for ranked play outputs.
-
-This file is designed to be "thin wrapper only":
-- It does NOT modify any existing baseline/context-ML endpoints.
-- It only adds new endpoints that your frontend/orchestrator can call.
-
-How to register (example):
-    from fastapi import FastAPI
-    from nlp_endpoints import router as nlp_router
-    app = FastAPI()
-    app.include_router(nlp_router)
-"""
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-# Robust imports (works whether you run from backend/ or as a package)
-try:
-    from nlp_parser import parse_game_context, context_to_context_ml_params
-    from nlp_explain import explain_recommendations, explain_shotplan
-except Exception:  # pragma: no cover
-    # If backend is a package, allow relative imports
-    from .nlp_parser import parse_game_context, context_to_context_ml_params  # type: ignore
-    from .nlp_explain import explain_recommendations, explain_shotplan  # type: ignore
+from application.api_coordination.auth_dependency import require_auth
 
+try:
+    from infrastructure.external_integrations import (
+        parse_game_context,
+        context_to_context_ml_params,
+        explain_recommendations,
+        explain_shotplan,
+    )
+except Exception:  # pragma: no cover
+    from nlp_parser import parse_game_context, context_to_context_ml_params  # type: ignore
+    from nlp_explain import explain_recommendations, explain_shotplan  # type: ignore
 
 router = APIRouter(prefix="/nlp", tags=["nlp"])
 
-
-# ----------------------------
 # Request / Response models
-# ----------------------------
 
 class ParseRequest(BaseModel):
     text: str = Field(..., description="Natural-language description of the game situation.")
@@ -51,7 +30,6 @@ class ParseRequest(BaseModel):
         description="Optional fallback values for missing fields (e.g., period/time_remaining/margin).",
     )
 
-
 class ParseResponse(BaseModel):
     context: Dict[str, Any]
     confidence: float
@@ -59,7 +37,6 @@ class ParseResponse(BaseModel):
     matches: Dict[str, str]
     # These are the exact params your /rank-plays/context-ml expects (when available)
     context_ml_params: Optional[Dict[str, Any]] = None
-
 
 class ExplainRequest(BaseModel):
     # Parsed/structured context (from /nlp/parse or manual form)
@@ -82,7 +59,6 @@ class ExplainRequest(BaseModel):
         description="Optional shotplan output to include in the explanation payload.",
     )
 
-
 class ExplainResponse(BaseModel):
     context_summary: str
     overall_summary: str
@@ -90,11 +66,8 @@ class ExplainResponse(BaseModel):
     notes: list[str]
     shotplan_explanation: Optional[Dict[str, Any]] = None
 
-
 def _to_plain_dict(obj: Any) -> Any:
-    """
-    Convert Pydantic models/dataclasses to plain dicts safely.
-    """
+    """Convert Pydantic models/dataclasses to plain dicts safely."""
     # Pydantic v2: model_dump; v1: dict
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
@@ -102,16 +75,11 @@ def _to_plain_dict(obj: Any) -> Any:
         return obj.dict()
     return obj
 
-
-# ----------------------------
 # Endpoints
-# ----------------------------
 
-@router.post("/parse", response_model=ParseResponse)
+@router.post("/parse", response_model=ParseResponse, dependencies=[Depends(require_auth)])
 def nlp_parse(req: ParseRequest) -> ParseResponse:
-    """
-    Parse natural language into structured game context.
-    """
+    """Parse natural language into structured game context."""
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="text is required")
@@ -133,13 +101,9 @@ def nlp_parse(req: ParseRequest) -> ParseResponse:
         context_ml_params=context_ml_params,
     )
 
-
-@router.post("/explain", response_model=ExplainResponse)
+@router.post("/explain", response_model=ExplainResponse, dependencies=[Depends(require_auth)])
 def nlp_explain(req: ExplainRequest) -> ExplainResponse:
-    """
-    Build deterministic explanations for ranked plays (and optionally shotplan),
-    using ONLY provided metrics and context.
-    """
+    """Build deterministic explanations for ranked plays (and optionally shotplan),"""
     if not isinstance(req.context, dict):
         raise HTTPException(status_code=422, detail="context must be an object/dict")
 

@@ -1,34 +1,12 @@
-# backend/nlp_parser.py
+"""Rule-based NLP parser for basketball play-type queries."""
 from __future__ import annotations
-
-"""
-Natural-language game context parser (defense-friendly).
-
-This module is intentionally *not* an LLM wrapper. It converts a short coaching
-sentence (e.g., "Down 3 with 0:28 left in Q4, need a quick 2, they're switching")
-into the SAME structured context fields already used by your existing endpoints.
-
-Primary target:
-- /rank-plays/context-ml expects query params:
-    margin (float): our_score - opp_score
-    period (int): 1-4 regular, 5 = OT
-    time_remaining (float): seconds remaining in the current period (0..720)
-
-We also optionally extract extra fields for UI/explanations (need, defense_style, pace, etc.)
-without affecting the existing recommender logic.
-
-No external dependencies (stdlib only).
-"""
 
 from dataclasses import dataclass, field
 import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-
-# ----------------------------
 # Public data structures
-# ----------------------------
 
 @dataclass(frozen=True)
 class NLPParseResult:
@@ -39,14 +17,10 @@ class NLPParseResult:
     clarifying_questions: List[str] = field(default_factory=list)
     matches: Dict[str, str] = field(default_factory=dict)
 
-
-# ----------------------------
 # Normalization helpers
-# ----------------------------
 
 _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[,\.;]+")
-
 
 def _norm(text: str) -> str:
     """Lowercase + normalize whitespace, keep ':' for clock parsing."""
@@ -57,10 +31,8 @@ def _norm(text: str) -> str:
     t = _WS_RE.sub(" ", t).strip()
     return t
 
-
 def _clamp(x: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, x)))
-
 
 def _safe_float(x: Any) -> Optional[float]:
     try:
@@ -71,10 +43,7 @@ def _safe_float(x: Any) -> Optional[float]:
     except Exception:
         return None
 
-
-# ----------------------------
 # Core parsers
-# ----------------------------
 
 _PERIOD_PATTERNS: List[Tuple[int, re.Pattern]] = [
     # Overtime
@@ -86,12 +55,8 @@ _PERIOD_PATTERNS: List[Tuple[int, re.Pattern]] = [
     (1, re.compile(r"\bq\s*1\b|\b1(?:st)?\s*(?:q|quarter)\b|\bfirst\s+quarter\b")),
 ]
 
-
 def parse_period(text: str) -> Tuple[Optional[int], Optional[str]]:
-    """
-    Parse quarter/period from text.
-    Returns: (period, matched_substring)
-    """
+    """Parse quarter/period from text."""
     for period, pat in _PERIOD_PATTERNS:
         m = pat.search(text)
         if m:
@@ -105,7 +70,6 @@ def parse_period(text: str) -> Tuple[Optional[int], Optional[str]]:
 
     return None, None
 
-
 _TIME_MMSS_RE = re.compile(r"\b(?P<mm>\d{1,2})\s*:\s*(?P<ss>\d{2})\b")
 _TIME_SECONDS_RE = re.compile(r"\b(?P<s>\d{1,3})\s*(?:s|sec|secs|second|seconds)\b")
 _TIME_MINUTES_RE = re.compile(r"\b(?P<m>\d{1,2})\s*(?:m|min|mins|minute|minutes)\b")
@@ -113,17 +77,8 @@ _TIME_MIN_SEC_COMBO_RE = re.compile(
     r"\b(?P<m>\d{1,2})\s*(?:m|min|mins|minute|minutes)\s*(?P<s>\d{1,2})\s*(?:s|sec|secs|second|seconds)\b"
 )
 
-
 def parse_time_remaining_seconds(text: str) -> Tuple[Optional[float], Optional[str]]:
-    """
-    Parse a clock reference and return *seconds remaining in the current period*.
-
-    Supports:
-    - 0:28, 1:45, 10:00
-    - 28 seconds, 45 sec
-    - 1 min 45 sec
-    - 2 minutes (interpreted as 120 sec)
-    """
+    """Parse a clock reference and return *seconds remaining in the current period*."""
     # Prefer explicit mm:ss
     m = _TIME_MMSS_RE.search(text)
     if m:
@@ -156,7 +111,6 @@ def parse_time_remaining_seconds(text: str) -> Tuple[Optional[float], Optional[s
 
     return None, None
 
-
 # Margin patterns:
 # - "down 3", "down by 3", "trailing by 3" => -3
 # - "up 5", "leading by 5", "ahead by 5" => +5
@@ -166,11 +120,8 @@ _MARGIN_DOWN_RE = re.compile(r"\b(?:down|trailing|behind)\s*(?:by\s*)?(?P<n>\d{1
 _MARGIN_UP_RE = re.compile(r"\b(?:up|leading|ahead)\s*(?:by\s*)?(?P<n>\d{1,2})\b")
 _MARGIN_TIED_RE = re.compile(r"\b(?:tie|tied|even)\s*(?:game|score)?\b")
 
-
 def parse_score_margin(text: str) -> Tuple[Optional[float], Optional[str]]:
-    """
-    Parse score margin as our_score - opp_score.
-    """
+    """Parse score margin as our_score - opp_score."""
     m = _MARGIN_TIED_RE.search(text)
     if m:
         return 0.0, m.group(0)
@@ -192,16 +143,10 @@ def parse_score_margin(text: str) -> Tuple[Optional[float], Optional[str]]:
 
     return None, None
 
-
-# ----------------------------
 # Optional "extra" fields
-# ----------------------------
 
 def parse_need(text: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Parse 'need' / objective cues.
-    Returns a normalized label (string) plus the matched substring.
-    """
+    """Parse 'need' / objective cues."""
     # Specific first
     if re.search(r"\b2\s*for\s*1\b|\btwo\s*for\s*one\b|\b2-for-1\b", text):
         return "two_for_one", "2-for-1"
@@ -220,11 +165,8 @@ def parse_need(text: str) -> Tuple[Optional[str], Optional[str]]:
 
     return None, None
 
-
 def parse_defense_style(text: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Parse opponent defense style cues (very lightweight).
-    """
+    """Parse opponent defense style cues (very lightweight)."""
     if re.search(r"\bswitch(?:ing)?\b|\bswitch\s+everything\b", text):
         return "switch", "switch"
 
@@ -248,21 +190,15 @@ def parse_defense_style(text: str) -> Tuple[Optional[str], Optional[str]]:
 
     return None, None
 
-
 def parse_pace(text: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Parse pace cues: push vs slow.
-    """
+    """Parse pace cues: push vs slow."""
     if re.search(r"\bpush\b|\bfast\b|\bquick\b|\bearly\b|\btransition\b", text):
         return "push", "push/fast"
     if re.search(r"\bslow\b|\bwalk\s+it\s+up\b|\bburn\s+clock\b|\bmilk\s+clock\b", text):
         return "slow", "slow/burn clock"
     return None, None
 
-
-# ----------------------------
 # Confidence + output shaping
-# ----------------------------
 
 def _score_confidence(
     period: Optional[int],
@@ -270,11 +206,7 @@ def _score_confidence(
     margin: Optional[float],
     extras_found: int,
 ) -> float:
-    """
-    Simple, explainable confidence:
-    - 0.34 each for period, time, margin if found explicitly
-    - plus up to 0.10 for extra cues
-    """
+    """Simple, explainable confidence:"""
     score = 0.0
     if period is not None:
         score += 0.34
@@ -284,7 +216,6 @@ def _score_confidence(
         score += 0.34
     score += min(0.10, extras_found * 0.02)
     return _clamp(score, 0.0, 1.0)
-
 
 def _build_clarifying_questions(
     period: Optional[int],
@@ -300,23 +231,10 @@ def _build_clarifying_questions(
         qs.append("What's the score margin? (e.g., down 3 / up 5 / tied)")
     return qs
 
-
-# ----------------------------
 # Main entry point
-# ----------------------------
 
 def parse_game_context(text: str, defaults: Optional[Dict[str, Any]] = None) -> NLPParseResult:
-    """
-    Parse a natural-language 'game situation' string into structured context.
-
-    `defaults` (optional) can provide fallback values if some fields are missing,
-    e.g. defaults={"period": 4, "time_remaining": 120, "margin": -3}.
-
-    Returns NLPParseResult:
-      - context includes keys: margin, period, time_remaining, need, defense_style, pace
-      - confidence in [0,1]
-      - clarifying_questions if required fields are missing
-    """
+    """Parse a natural-language 'game situation' string into structured context."""
     raw = text or ""
     t = _norm(raw)
 
@@ -390,14 +308,8 @@ def parse_game_context(text: str, defaults: Optional[Dict[str, Any]] = None) -> 
         matches=matches,
     )
 
-
 def context_to_context_ml_params(context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Convert a parsed `context` into the *exact* query params expected by
-    /rank-plays/context-ml.
-
-    Raises ValueError if required fields are missing.
-    """
+    """Convert a parsed `context` into the *exact* query params expected by"""
     period = context.get("period", None)
     margin = context.get("margin", None)
     time_remaining = context.get("time_remaining", None)
@@ -412,24 +324,4 @@ def context_to_context_ml_params(context: Dict[str, Any]) -> Dict[str, Any]:
         "time_remaining": float(time_remaining),
     }
 
-
-# ----------------------------
 # Quick manual demo (optional)
-# ----------------------------
-
-if __name__ == "__main__":
-    samples = [
-        "Down 3 with 0:28 left in Q4, need a quick 2, they're switching everything",
-        "Tie game, 1:45 in the 3rd, get a stop",
-        "Up by 5, 2 minutes left, burn clock, vs 2-3 zone",
-        "Overtime 0:10, need a 3",
-        "One possession game, late in 4th",
-    ]
-    for s in samples:
-        r = parse_game_context(s)
-        print("-" * 80)
-        print("IN :", s)
-        print("OUT:", r.context)
-        print("CONF:", r.confidence)
-        if r.clarifying_questions:
-            print("QS :", r.clarifying_questions)

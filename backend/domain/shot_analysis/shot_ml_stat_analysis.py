@@ -1,27 +1,4 @@
-"""backend/shot_ml_stat_analysis.py
-
-Dataset2 (NBA PBP shots) EDA + "defense-friendly" analysis payload.
-
-This is the Dataset2 analogue of `ml_stat_analysis.py` (Dataset1).
-
-Confirmed Phase 1 outputs in this repo:
-  - backend/data/pbp/shots_clean.parquet columns (18):
-      SEASON_STR, TEAM_ABBR, OPP_ABBR, HOME_FLAG, SHOT_TYPE, SHOT_VALUE,
-      MADE, POINTS, X, Y, DIST, ANGLE, ZONE, PERIOD, CLOCK_SEC, MARGIN,
-      GAME_ID, SHOOTER_ID
-
-This module previously referenced legacy/raw fields (ACTION_TYPE,
-ZONE_BASIC, etc.) which do not exist in the Phase 1 schema. That caused
-Phase 2 build + endpoints to fail.
-
-Design goals:
-  - Fast: sample rows, avoid heavy per-request work, cache results on disk.
-  - Explainable: produce simple tables (by shot_type, by zone) + basic
-    correlations and feature-vs-target signals.
-  - Deterministic invalidation: cache is invalidated if shots_clean.parquet
-    changes (mtime/size).
-"""
-
+"""Shot-chart statistical analysis with model comparison."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -32,14 +9,12 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_selection import SelectKBest, f_regression
 
-from infrastructure.data_access.pbp_cache import build_meta, cache_valid, fingerprint_file, read_json, write_json_atomic
-from infrastructure.data_access.pbp_constants import CACHE_DIR, CLEAN_PARQUET
+from infrastructure.data_access import build_meta, cache_valid, fingerprint_file, read_json, write_json_atomic, CACHE_DIR
+from domain.shot_analysis.shot_etl import CLEAN_PARQUET
 from domain.shot_analysis.shot_ml_models import get_feature_spec, load_shots_for_ml
-
 
 ANALYSIS_CACHE_PATH = CACHE_DIR / "shot_ml_analysis_cache.json"
 SCHEMA_VERSION = "shot_ml_analysis_v1"
-
 
 @dataclass
 class _Cache:
@@ -47,9 +22,7 @@ class _Cache:
     max_rows: int
     payload: Dict[str, Any]
 
-
 _CACHE: Optional[_Cache] = None
-
 
 def _finite(x: Any) -> Optional[float]:
     try:
@@ -57,7 +30,6 @@ def _finite(x: Any) -> Optional[float]:
         return v if math.isfinite(v) else None
     except Exception:
         return None
-
 
 def _summary_stats(x: np.ndarray) -> Dict[str, Optional[float]]:
     x = np.asarray(x, dtype=float)
@@ -74,7 +46,6 @@ def _summary_stats(x: np.ndarray) -> Dict[str, Optional[float]]:
         "std": _finite(np.std(x, ddof=1)) if x.size > 1 else 0.0,
     }
 
-
 def _histogram(x: np.ndarray, bins: int = 20) -> Dict[str, Any]:
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
@@ -83,24 +54,20 @@ def _histogram(x: np.ndarray, bins: int = 20) -> Dict[str, Any]:
     counts, edges = np.histogram(x, bins=bins)
     return {"bins": [float(e) for e in edges.tolist()], "counts": [int(c) for c in counts.tolist()]}
 
-
 def _corr_matrix(df: pd.DataFrame, cols: List[str]) -> Dict[str, Any]:
     sub = df[cols].astype(float)
     corr = sub.corr(method="pearson").fillna(0.0)
     return {"labels": cols, "matrix": [[float(v) for v in row] for row in corr.to_numpy().tolist()]}
-
 
 def _rate(makes: float, attempts: float) -> Optional[float]:
     if attempts <= 0:
         return None
     return float(makes) / float(attempts)
 
-
 def _pps(points: float, attempts: float) -> Optional[float]:
     if attempts <= 0:
         return None
     return float(points) / float(attempts)
-
 
 def compute_shot_ml_analysis(
     *,

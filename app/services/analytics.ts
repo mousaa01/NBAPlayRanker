@@ -3,4 +3,6 @@ export {
   fetchModelMetrics,
   fetchMlAnalysis,
   fetchPipelineInfo,
-} from "../utils";
+  type ModelMetricsResponse,
+  type MlAnalysisResponse,
+} from "../infrastructure/api-client";

@@ -1,4 +1,3 @@
-# backend/pbp_phase2_endpoints.py
 from __future__ import annotations
 
 import json
@@ -7,11 +6,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 
-from domain.shot_analysis.shot_ml_models import run_shot_model_cv
-from domain.shot_analysis.shot_ml_stat_analysis import compute_shot_ml_analysis
+from application.api_coordination.auth_dependency import require_role
+
+from domain.shot_analysis import run_shot_model_cv, compute_shot_ml_analysis
 
 router = APIRouter(tags=["pbp-phase2"])
 
@@ -63,7 +63,7 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-@router.get("/analysis/shot-ml")
+@router.get("/analysis/shot-ml", dependencies=[Depends(require_role("analytics"))])
 def pbp_phase2_shot_ml_analysis(
     n_splits: int = Query(5, ge=2, le=10, description="Metadata only (kept for consistency)."),
     refresh: bool = Query(False, description="If true, recompute (can take time)."),
@@ -83,7 +83,7 @@ def pbp_phase2_shot_ml_analysis(
             detail=(
                 "Phase 2 analysis cache not found.\n"
                 "Run:\n"
-                "  python backend/pbp_phase2_build.py\n"
+                "  python backend/data/etl/pbp_phase2_build.py\n"
                 f"Expected cache: {ANALYSIS_CACHE}"
             ),
         )
@@ -103,7 +103,7 @@ def pbp_phase2_shot_ml_analysis(
     return jsonable_encoder(out)
 
 
-@router.get("/metrics/shot-models")
+@router.get("/metrics/shot-models", dependencies=[Depends(require_role("analytics"))])
 def pbp_phase2_shot_model_metrics(
     n_splits: int = Query(5, ge=2, le=10, description="GroupKFold splits by GAME_ID."),
     refresh: bool = Query(False, description="If true, recompute CV (can take time)."),
@@ -122,7 +122,7 @@ def pbp_phase2_shot_model_metrics(
             detail=(
                 "Phase 2 CV cache not found.\n"
                 "Run:\n"
-                "  python backend/pbp_phase2_build.py\n"
+                "  python backend/data/etl/pbp_phase2_build.py\n"
                 f"Expected cache: {CV_CACHE}"
             ),
         )

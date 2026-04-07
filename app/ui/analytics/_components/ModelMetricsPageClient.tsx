@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchModelMetrics, fetchPipelineInfo, fetchMlAnalysis } from "../../../utils";
+import { fetchModelMetrics, fetchPipelineInfo, fetchMlAnalysis } from "../../../services/analytics";
 
 type MetricsRow = {
   model: string;

@@ -1,9 +1,4 @@
-"""Ridge model tests for the contextual ML recommender.
-
-Mapped to use case: Rank plays with game context.
-Run with: pytest backend/tests/test_ridge_model.py -v
-"""
-
+"""Tests for Ridge model evaluation."""
 from __future__ import annotations
 
 import numpy as np
@@ -12,6 +7,7 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from domain.baseline_recommendation import BaselineRecommender
 from infrastructure.model_management.ml_models import (
     _make_ridge,
     FEATURE_COLS,
@@ -22,18 +18,20 @@ from infrastructure.model_management.ml_models import (
     get_features_and_target,
 )
 
+@pytest.fixture(scope="module")
+def _recommender():
+    """Build BaselineRecommender once for all tests in the module."""
+    return BaselineRecommender(str(DATA_CSV_PATH))
 
 @pytest.fixture(scope="module")
-def offense_data():
+def offense_data(_recommender):
     """Load offense dataset once for integration tests."""
-    return load_offense_dataset(DATA_CSV_PATH)
-
+    return load_offense_dataset(_recommender.team_df, _recommender.league_df)
 
 @pytest.fixture(scope="module")
-def cv_output():
+def cv_output(_recommender):
     """Run 5-fold season holdout once for reuse across tests."""
-    return run_cv_evaluation(n_splits=5, random_state=42)
-
+    return run_cv_evaluation(_recommender.team_df, _recommender.league_df, n_splits=5, random_state=42)
 
 def test_ridge_pipeline_structure():
     """TC-ML-01 verify: pipeline has scaler then Ridge with tuned alpha."""
@@ -57,7 +55,6 @@ def test_ridge_pipeline_structure():
     )
     assert model.alpha == RIDGE_ALPHA
 
-
 def test_ridge_fits_synthetic_data():
     """TC-ML-02 verify: Ridge trains on synthetic data and predicts finite values."""
     rng = np.random.default_rng(42)
@@ -73,7 +70,6 @@ def test_ridge_fits_synthetic_data():
 
     assert np.all(np.isfinite(preds))
     assert preds.shape == (n_samples,)
-
 
 def test_ridge_coefficients_bounded():
     """TC-ML-03 derive: Ridge coefficient norm stays under a loose bound."""
@@ -97,7 +93,6 @@ def test_ridge_coefficients_bounded():
     l2_norm = float(np.linalg.norm(coefs))
     assert l2_norm < COEF_L2_UPPER_BOUND
 
-
 @pytest.mark.integration
 def test_ridge_outperforms_baseline(cv_output):
     """TC-ML-04 verify: Ridge beats league-mean baseline on holdout RMSE."""
@@ -107,7 +102,6 @@ def test_ridge_outperforms_baseline(cv_output):
     baseline_rmse = float(summary_df.loc["Baseline (league mean)", "RMSE_mean"])
 
     assert ridge_rmse < baseline_rmse
-
 
 @pytest.mark.integration
 def test_ridge_predictions_in_valid_range(offense_data):
@@ -131,7 +125,6 @@ def test_ridge_predictions_in_valid_range(offense_data):
     assert np.all(preds >= PPP_MIN)
     assert np.all(preds <= PPP_MAX)
 
-
 @pytest.mark.integration
 def test_ridge_per_fold_rmse_acceptable(cv_output):
     """TC-ML-06 derive: each holdout fold RMSE stays under a safety ceiling."""
@@ -142,7 +135,6 @@ def test_ridge_per_fold_rmse_acceptable(cv_output):
 
     for fold_index, fold_rmse in enumerate(ridge_fold_rmses, start=1):
         assert fold_rmse < RMSE_FOLD_UPPER_BOUND, f"fold {fold_index} RMSE too high"
-
 
 @pytest.mark.integration
 def test_feature_dataset_shape(offense_data):
@@ -155,7 +147,6 @@ def test_feature_dataset_shape(offense_data):
     assert X.shape[0] == y.shape[0]
     assert np.all(np.isfinite(X))
     assert np.all(np.isfinite(y))
-
 
 def test_ridge_regularization_effect():
     """TC-ML-08 verify: larger alpha should shrink coefficient norm."""

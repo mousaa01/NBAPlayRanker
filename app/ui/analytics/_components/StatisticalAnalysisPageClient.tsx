@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { fetchMlAnalysis } from "../../../utils";
+import { fetchMlAnalysis } from "../../../services/analytics";
 
 type CorrMatrix = { labels: string[]; matrix: number[][] };
 

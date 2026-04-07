@@ -1,5 +1,3 @@
-# backend/pbp_viz.py
-
 from __future__ import annotations
 
 from dataclasses import dataclass

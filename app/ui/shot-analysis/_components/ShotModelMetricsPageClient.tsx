@@ -4,7 +4,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { fetchShotModelMetrics } from "../../../utils";
+import { fetchShotModelMetrics } from "../../../services/shotAnalysis";
 
 type MetricsRow = {
   model: string;

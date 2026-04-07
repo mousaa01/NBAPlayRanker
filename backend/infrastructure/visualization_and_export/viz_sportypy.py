@@ -1,5 +1,5 @@
-# backend/viz_sportypy.py
-import base64
+from __future__ import annotations
+
 from io import BytesIO
 from typing import Dict
 
@@ -11,21 +11,13 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle, Wedge
 
 from sportypy.surfaces.basketball import NBACourt
-from sportypy._base_classes._base_feature import BaseFeature
+
+from infrastructure.visualization_and_export.viz_shot_heatmap import (
+    _patch_sportypy_circle,
+    png_bytes_to_base64,
+)
 
 
-# --- 1) SPEED PATCH: SportyPy circle resolution (massive performance fix) ---
-def _patch_sportypy_circle(npoints: int = 400) -> None:
-    def fast_create_circle(center=(0.0, 0.0), npoints=npoints, r=1.0, start=0.0, end=2.0):
-        theta = np.linspace(start * np.pi, end * np.pi, npoints)
-        x = center[0] + (r * np.cos(theta))
-        y = center[1] + (r * np.sin(theta))
-        return pd.DataFrame({"x": x, "y": y})
-
-    BaseFeature.create_circle = staticmethod(fast_create_circle)
-
-
-# --- 2) Map play types -> zones to highlight (simple & defendable baseline) ---
 PLAYTYPE_ZONES: Dict[str, Dict[str, float]] = {
     "Spotup": {"corner3": 1.0, "arc3": 0.8},
     "Cut": {"rim": 1.0},
@@ -52,11 +44,6 @@ def zones_for_playtype(play_type: str) -> Dict[str, float]:
     return {"rim": 0.6, "arc3": 0.4}  # fallback
 
 
-def png_bytes_to_base64(png: bytes) -> str:
-    return base64.b64encode(png).decode("utf-8")
-
-
-# --- 3) Render chart ---
 def render_playtype_zone_png(play_type: str, title: str) -> bytes:
     _patch_sportypy_circle(400)
     zones = zones_for_playtype(play_type)

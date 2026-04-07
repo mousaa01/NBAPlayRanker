@@ -6,12 +6,14 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   API_BASE,
+  authenticatedDownload,
   baselineRank,
   fetchBaselineInfo,
   fetchMetaOptions,
   fetchPlaytypeViz,
   getBaselineCsvUrl,
-} from "../../../utils";
+} from "../../../services/recommendation";
+import { normalizeWeights } from "../../../domain/weight-calculation";
 
 type MetaOptions = {
   seasons: string[];
@@ -44,8 +46,6 @@ type VizResponse = {
   caption: string;
   image_base64: string;
 };
-
-// ===== Formatting helpers =====
 function fmt(n: any, digits = 3) {
   const x = Number(n);
   if (!Number.isFinite(x)) return "—";
@@ -79,15 +79,6 @@ function pickDefaultOpp(teams: string[], our: string) {
     if (teams.includes(t) && t !== our) return t;
   }
   return teams.find((t) => t !== our) ?? "";
-}
-
-// Normalize weights so interpretation stays stable (w_off + w_def = 1)
-function normalizeWeights(wOff: number, wDef: number) {
-  const a = Number(wOff);
-  const b = Number(wDef);
-  const sum = a + b;
-  if (!Number.isFinite(sum) || sum <= 0) return { wOff: 0.7, wDef: 0.3 };
-  return { wOff: a / sum, wDef: b / sum };
 }
 
 function Icon({ name }: { name: "play" | "download" | "map" | "pdf" | "info" }) {
@@ -830,9 +821,9 @@ export default function MatchupPage() {
                 <Icon name="play" /> {loading ? "Running…" : "Run Baseline"}
               </button>
 
-              <a className="btn" href={csvUrl} target="_blank" rel="noopener noreferrer" aria-disabled={!canRun}>
+              <button className="btn" type="button" disabled={!canRun} onClick={() => authenticatedDownload(csvUrl).catch(e => setError(String(e)))}>
                 <Icon name="download" /> Export CSV
-              </a>
+              </button>
             </div>
 
             <div className="badge">{season && our && opp ? matchupLabel : "Select teams"}</div>
@@ -883,9 +874,9 @@ export default function MatchupPage() {
                     <Icon name="map" /> {vizLoading ? "Generating…" : "Generate map"}
                   </button>
 
-                  <a className="btn" href={getPdfUrlForPlayType(bestRow.playType)} target="_blank" rel="noopener noreferrer">
+                  <button className="btn" type="button" onClick={() => authenticatedDownload(getPdfUrlForPlayType(bestRow.playType)).catch(e => setError(String(e)))}>
                     <Icon name="pdf" /> Export 1-page PDF
-                  </a>
+                  </button>
                 </div>
               </div>
             ) : null}
@@ -950,15 +941,14 @@ export default function MatchupPage() {
                       <Icon name="map" /> {vizLoading ? "Generating…" : "Generate map"}
                     </button>
 
-                    <a
+                    <button
                       className="btn"
-                      href={getPdfUrlForPlayType(vizPlayType)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      aria-disabled={!vizReady}
+                      type="button"
+                      disabled={!vizReady}
+                      onClick={() => authenticatedDownload(getPdfUrlForPlayType(vizPlayType)).catch(e => setError(String(e)))}
                     >
                       <Icon name="pdf" /> Export PDF
-                    </a>
+                    </button>
                   </div>
 
                   {vizError ? <div className="error">{vizError}</div> : null}

@@ -1,12 +1,10 @@
 "use client";
 
 // Shot Plan (Baseline)
-// -------------------
 // This page is Dataset2-focused (NBA play-by-play shot data).
 // It does two things:
 //   1) Calls the backend baseline shot-plan ranker to recommend *what* to shoot.
 //   2) Calls the backend heatmap renderer to visualize *where* those shots happen.
-
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -16,7 +14,8 @@ import {
   fetchShotHeatmap,
   fetchShotPlanRank,
   getShotPlanPdfUrl,
-} from "../../../utils";
+  authenticatedDownload,
+} from "../../../services/shotAnalysis";
 
 type ShotRow = Record<string, any> & {
   // Depending on the endpoint “level”, the backend may return:
@@ -216,18 +215,7 @@ export default function ShotPlanPage() {
       setLoading(true);
       setError(null);
 
-      // Run rank + heatmap in parallel for a faster UX.
-      //
-      // Rank endpoint:
-      // - gives top shot types + top zones (baseline “what to shoot”)
-      //
-      // Heatmap endpoint:
-      // - gives an image (base64) for “where those shots happen”
-      // - accepts optional shotType/zone filters and downsampling maxShots
-      //
-      // NOTE: utils.ts should route to the correct Dataset2 paths:
-      // - rank:   /pbp/shotplan   (NOT /pbp/shotplan/rank)
-      // - heatmap:/pbp/viz/shot-heatmap (NOT /pbp/viz/heatmap)
+
       const [r, h] = await Promise.all([
         fetchShotPlanRank({ season, our, opp, k, wOff }),
         fetchShotHeatmap({
@@ -429,18 +417,17 @@ export default function ShotPlanPage() {
 
           {/* PDF export is a GET URL; opens in new tab */}
           {pdfUrl ? (
-            <a
+            <button
               className="btn"
-              href={pdfUrl}
-              target="_blank"
-              rel="noreferrer"
+              type="button"
+              onClick={() => authenticatedDownload(pdfUrl).catch(e => alert(e))}
               style={{
                 background: "rgba(255,255,255,0.06)",
                 border: "1px solid rgba(255,255,255,0.12)",
               }}
             >
               Export PDF
-            </a>
+            </button>
           ) : null}
 
           {/* Separate page for deep heatmap exploration */}

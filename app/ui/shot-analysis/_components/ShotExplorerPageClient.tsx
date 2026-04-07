@@ -8,9 +8,9 @@ import {
   fetchPbpMetaOptions,
   fetchPbpShotsPreview,
   getPbpShotsCsvUrl,
-} from "../../../utils";
+} from "../../../services/shotAnalysis";
 
-import type { PbpShotsPreviewResponse } from "../../../utils";
+import type { PbpShotsPreviewResponse } from "../../../services/shotAnalysis";
 
 type Meta = {
   seasons: string[];

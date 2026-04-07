@@ -1,25 +1,4 @@
-"""backend/shot_ml_models.py
-
-Dataset2 (NBA play-by-play shots) ML model evaluation utilities.
-
-This module is **Dataset2-only**. It does not touch Dataset1 code.
-
-Phase 1 pipeline outputs (confirmed in this repo):
-  - backend/data/pbp/shots_clean.parquet
-    Columns (18):
-      SEASON_STR, TEAM_ABBR, OPP_ABBR, HOME_FLAG, SHOT_TYPE, SHOT_VALUE,
-      MADE, POINTS, X, Y, DIST, ANGLE, ZONE, PERIOD, CLOCK_SEC, MARGIN,
-      GAME_ID, SHOOTER_ID
-  - backend/data/pbp/cache/shots_canonical.parquet
-    Columns (18): season, team, opp, game_id, shooter_id, home, period,
-    clock_sec, margin, shot_type, zone, shot_value, is_make, points,
-    x, y, dist, angle
-
-Some earlier code expected legacy/raw column names (TEAM_ABBREVIATION,
-SHOT_DISTANCE, SHOT_CLOCK, PTS, etc.). This file normalizes those to the
-Phase 1 schema so Phase 2 CV + analysis endpoints do not crash.
-"""
-
+"""Shot-chart ML models: train, evaluate, and predict."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,22 +14,16 @@ from sklearn.model_selection import GroupKFold, KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from infrastructure.data_access.pbp_constants import CLEAN_PARQUET
+from domain.shot_analysis.shot_etl import CLEAN_PARQUET
 
-
-# -----------------------------------------------------------------------------
 # In-process cache for shots_clean.parquet
-# -----------------------------------------------------------------------------
-
 
 @dataclass
 class _CleanCache:
     cache_id: str
     df: pd.DataFrame
 
-
 _CLEAN_CACHE: Optional[_CleanCache] = None
-
 
 def _clean_cache_id() -> str:
     try:
@@ -58,7 +31,6 @@ def _clean_cache_id() -> str:
         return f"{st.st_mtime_ns}|{st.st_size}"
     except Exception:
         return "unknown"
-
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Rename legacy/raw columns into the Phase 1 *clean* schema."""
@@ -96,7 +68,6 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     if cols:
         df = df.rename(columns=cols)
     return df
-
 
 def get_shots_clean_df(*, force_reload: bool = False) -> pd.DataFrame:
     """Load shots_clean.parquet once per process (cached)."""
@@ -137,11 +108,7 @@ def get_shots_clean_df(*, force_reload: bool = False) -> pd.DataFrame:
 
     return _CLEAN_CACHE.df
 
-
-# -----------------------------------------------------------------------------
 # Feature specification
-# -----------------------------------------------------------------------------
-
 
 def get_feature_spec(*, include_shooter: bool = False) -> Dict[str, object]:
     """Return canonical feature + target definitions for Dataset2 ML."""
@@ -158,7 +125,6 @@ def get_feature_spec(*, include_shooter: bool = False) -> Dict[str, object]:
         "target": "POINTS",
         "group_col": "GAME_ID",
     }
-
 
 def load_shots_for_ml(
     *,
@@ -202,11 +168,7 @@ def load_shots_for_ml(
 
     return df
 
-
-# -----------------------------------------------------------------------------
 # CV utilities
-# -----------------------------------------------------------------------------
-
 
 def _fit_and_eval(
     model_name: str,
@@ -227,7 +189,6 @@ def _fit_and_eval(
     r2 = float(r2_score(y_test, preds))
 
     return {"model": model_name, "RMSE": rmse, "MAE": mae, "R2": r2}
-
 
 def run_shot_model_cv(
     n_splits: int = 5,

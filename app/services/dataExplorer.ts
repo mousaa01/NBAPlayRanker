@@ -1,7 +1,10 @@
 // Service layer for data-explorer API helpers.
 export {
+  API_BASE,
   fetchMetaOptions,
   fetchPipelineInfo,
   fetchTeamPlaytypesPreview,
   getTeamPlaytypesCsvUrl,
-} from "../utils";
+  type MetaOptions,
+  type TeamPlaytypesPreviewResponse,
+} from "../infrastructure/api-client";

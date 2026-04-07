@@ -9,5 +9,7 @@ matplotlib
 pillow
 reportlab
 sportypy
+PyJWT[crypto]
+python-dotenv
 pytest
 httpx

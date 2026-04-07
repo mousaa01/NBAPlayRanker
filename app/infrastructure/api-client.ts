@@ -1,35 +1,4 @@
-// app/utils.ts
-//
-// TypeScript API helpers for the PSPI.
-//
-// Endpoints used (Dataset1):
-// - GET  /meta/options
-// - GET  /meta/pipeline
-// - GET  /meta/baseline-formula
-// - GET  /data/team-playtypes
-// - GET  /data/team-playtypes.csv
-// - GET  /rank-plays/baseline
-// - GET  /rank-plays/baseline.csv
-// - GET  /rank-plays/context-ml
-// - GET  /metrics/baseline-vs-ml
-// - GET  /analysis/ml   <-- Statistical Analysis page
-// - GET  /viz/playtype-zones  <-- SportyPy visualization
-//
-// Endpoints used (Dataset2 / PBP):
-// - GET  /pbp/meta/options
-// - GET  /pbp/shotplan/rank
-// - GET  /pbp/viz/shot-heatmap
-// - GET  /pbp/shots/preview
-// - GET  /pbp/shots.csv
-//
-// GOAL:
-// - Keep Dataset1 behavior stable.
-// - Add Dataset2 helpers defensively (if /pbp isn't mounted, UI still doesn't crash).
-// - Make responses easy to consume by the frontend with consistent shapes.
-//
-// NOTE:
-// - Prefer /pbp endpoints for Dataset2.
-// - Fallback to legacy root endpoints only where it makes sense (heatmap, etc.)
+/** API client: all fetch helpers for the FastAPI backend. */
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
@@ -51,20 +20,50 @@ export const FALLBACK_TEAMS = [
   "POR","SAC","SAS","TOR","UTA","WAS",
 ];
 
-// ---------------------------
 // Small fetch helpers
-// ---------------------------
 //
 // We keep these tiny and predictable.
 // - fetchJson(): strict (throws on any non-2xx), good for stable Dataset1 endpoints.
 // - fetchJsonWithStatus(): throws an ApiError that includes HTTP status so we can fallback
 //   (super useful for Dataset2 because routes might be mounted under /pbp or at root).
 
+import { createClient } from "../../lib/supabase/client";
+
+/** Get Authorization headers for the current Supabase session. */
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const supabase = createClient();
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) {
+      return { Authorization: `Bearer ${token}` };
+    }
+  } catch {
+    // Supabase not configured — continue without auth
+  }
+  return {};
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { cache: "no-store" });
+  const headers = await getAuthHeaders();
+  const res = await fetch(url, { cache: "no-store", headers });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`API error ${res.status}: ${text}`);
+  }
+  return (await res.json()) as T;
+}
+
+export async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const authHeaders = await getAuthHeaders();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}${text ? ` — ${text}` : ""}`);
   }
   return (await res.json()) as T;
 }
@@ -83,7 +82,8 @@ class ApiError extends Error {
 }
 
 async function fetchJsonWithStatus<T>(url: string): Promise<T> {
-  const res = await fetch(url, { cache: "no-store" });
+  const headers = await getAuthHeaders();
+  const res = await fetch(url, { cache: "no-store", headers });
   const text = await res.text();
 
   if (!res.ok) {
@@ -99,9 +99,35 @@ async function fetchJsonWithStatus<T>(url: string): Promise<T> {
 }
 
 /**
- * Try a list of candidate URLs in order and return the first one that works.
- * This is the core trick that makes Dataset2 "just work" even if routes differ.
+ * Authenticated file download (PDF, CSV, etc.).
+ * Uses fetch + blob to attach the auth header, then triggers a browser download.
  */
+export async function authenticatedDownload(url: string, filename?: string): Promise<void> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(url, { cache: "no-store", headers });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Download failed (${res.status}): ${text}`);
+  }
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = filename || extractFilename(res) || "download";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(blobUrl);
+}
+
+function extractFilename(res: Response): string | null {
+  const cd = res.headers.get("Content-Disposition");
+  if (!cd) return null;
+  const match = cd.match(/filename="?([^";\s]+)"?/);
+  return match?.[1] ?? null;
+}
+
+/** Try a list of candidate URLs in order and return the first one that works. */
 async function tryJsonCandidates<T>(
   urls: string[],
   opts?: {
@@ -138,9 +164,7 @@ async function tryJsonCandidates<T>(
   throw new Error(`Request failed.\nTried:\n${attempted}\n\nLast error: ${msg}`);
 }
 
-// ---------------------------
 // Types (Dataset1)
-// ---------------------------
 
 export type MetaOptions = {
   seasons: string[];
@@ -207,9 +231,7 @@ export type MlAnalysisResponse = {
   model_selection: any;
 };
 
-// ---------------------------
 // Types (Dataset2 / Shots Intelligence + Viz)
-// ---------------------------
 
 // Shot Plan ranking response (Baseline shot recommender on Dataset2)
 export type ShotPlanRankResponse = {
@@ -295,9 +317,7 @@ export type PbpShotsPreviewResponse = {
   _endpoint_used?: string;
 };
 
-// ---------------------------
 // Helpers to keep UI from crashing
-// ---------------------------
 //
 // You hit a runtime error like:
 //   data.feature_selection.correlation_filter.threshold is undefined
@@ -328,9 +348,7 @@ function normalizeAnalysisResponse<T extends { feature_selection?: any }>(raw: a
   return obj as T;
 }
 
-// ---------------------------
 // Meta (Dataset1)
-// ---------------------------
 
 export async function fetchMetaOptions(): Promise<MetaOptions> {
   try {
@@ -349,9 +367,7 @@ export async function fetchMetaOptions(): Promise<MetaOptions> {
   }
 }
 
-// ---------------------------
 // Dataset2 (PBP) Meta
-// ---------------------------
 //
 // We keep Dataset2 dropdowns separate from Dataset1 meta, because Dataset2 has
 // its own set of seasons/teams coming from the PBP shots parquet.
@@ -386,9 +402,7 @@ export async function fetchBaselineInfo(): Promise<any> {
   return await fetchJson(`${API_BASE}/meta/baseline-formula`);
 }
 
-// ---------------------------
 // Data Explorer (Dataset1)
-// ---------------------------
 
 export async function fetchTeamPlaytypesPreview(opts: {
   season: string;
@@ -430,13 +444,10 @@ export function getTeamPlaytypesCsvUrl(opts: {
   if (playType) params.set("play_type", playType);
   params.set("min_poss", String(minPoss));
 
-
   return `${API_BASE}/data/team-playtypes.csv?${params.toString()}`;
 }
 
-// ---------------------------
 // Baseline ranking (Dataset1)
-// ---------------------------
 
 export async function baselineRank(opts: {
   season: string;
@@ -507,9 +518,7 @@ export function getBaselineCsvUrl(opts: {
   return `${API_BASE}/rank-plays/baseline.csv?${params.toString()}`;
 }
 
-// ---------------------------
 // Context + ML ranking (Dataset1)
-// ---------------------------
 
 export async function contextRank(opts: {
   season: string;
@@ -572,9 +581,7 @@ export async function contextRank(opts: {
   }));
 }
 
-// ---------------------------
 // Model metrics (Dataset1)
-// ---------------------------
 
 export async function fetchModelMetrics(nSplits = 5): Promise<ModelMetricsResponse> {
   const params = new URLSearchParams({ n_splits: String(nSplits) });
@@ -583,9 +590,7 @@ export async function fetchModelMetrics(nSplits = 5): Promise<ModelMetricsRespon
   );
 }
 
-// ---------------------------
 // Statistical Analysis (Dataset1)
-// ---------------------------
 
 export async function fetchMlAnalysis(opts?: {
   nSplits?: number;
@@ -608,9 +613,7 @@ export async function fetchMlAnalysis(opts?: {
   return normalizeAnalysisResponse<MlAnalysisResponse>(raw);
 }
 
-// ---------------------------
 // SportyPy Visualization (Dataset1)
-// ---------------------------
 
 export async function fetchPlaytypeViz(opts: {
   season: string;
@@ -632,9 +635,7 @@ export async function fetchPlaytypeViz(opts: {
   );
 }
 
-// ---------------------------
 // Shot Intelligence (Dataset2)
-// ---------------------------
 //
 
 //
@@ -825,9 +826,7 @@ export async function fetchShotModelMetrics(
   );
 }
 
-// ---------------------------
 // Dataset2 Shots Explorer helpers (WHAT shot-explorer PAGE NEEDS)
-// ---------------------------
 //
 //  backend currently 404s on:
 //   GET /pbp/shots/preview
@@ -927,10 +926,7 @@ export function getPbpShotsCsvUrl(opts: {
   return `${API_BASE}/pbp/shots.csv?${params.toString()}`;
 }
 
-/**
- * Optional helper: if /pbp/shots.csv is not mounted in  backend,
- *  can use this as a fallback link in the UI.
- */
+/** Optional helper: if /pbp/shots.csv is not mounted in  backend, */
 export function getPbpShotsCsvUrlLegacy(opts: {
   season: string;
   team: string;

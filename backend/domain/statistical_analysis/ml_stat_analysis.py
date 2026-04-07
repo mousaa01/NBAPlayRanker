@@ -1,5 +1,3 @@
-# backend/ml_stat_analysis.py
-
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,7 +12,7 @@ from sklearn.model_selection import GroupKFold, GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from infrastructure.model_management.ml_models import FEATURE_COLS, TARGET_COL
+from infrastructure.model_management import FEATURE_COLS, TARGET_COL
 
 
 @dataclass

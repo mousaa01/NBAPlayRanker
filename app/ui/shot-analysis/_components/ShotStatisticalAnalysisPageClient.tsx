@@ -3,7 +3,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { fetchShotMlAnalysis } from "../../../utils";
+import { fetchShotMlAnalysis } from "../../../services/shotAnalysis";
 
 type CorrMatrix = { labels: string[]; matrix: number[][] };
 
@@ -124,9 +124,7 @@ function MiniHistogram({
   const max = Math.max(1, ...counts); // prevent divide-by-zero
 
   /**
-   * Determine a reasonable range label for bin i:
-   * - If bins are edges (counts+1), use [edge_i, edge_{i+1}]
-   * - If bins are centers (counts), approximate a range using midpoints
+   * Bin label logic: derives a range from edges or centers.
    */
   function getBinRange(i: number): { lo: number; hi: number } {
     const edges = bins;
@@ -211,11 +209,7 @@ export default function ShotStatisticalAnalysisPage() {
   const [heatmapMaxCols, setHeatmapMaxCols] = useState<number>(18);
   const [showRaw, setShowRaw] = useState<boolean>(false);
 
-  /**
-   * requestIdRef is used to prevent stale responses:
-   * If the user changes nSplits quickly or auto-refresh triggers, older requests
-   * might finish later and overwrite newer results. The id guards against that.
-   */
+  // Prevents stale responses when params change rapidly.
   const requestIdRef = useRef(0);
 
   // didInitRef ensures we only restore LocalStorage settings once

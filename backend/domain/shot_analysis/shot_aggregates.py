@@ -8,21 +8,17 @@ import pandas as pd
 
 from domain.shot_analysis.shot_etl import CLEAN_PARQUET
 
-# ---------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 PBP_DIR = DATA_DIR / "pbp"
 AGG_PARQUET = PBP_DIR / "shots_agg.parquet"
-
 
 def _reliability_weight(attempts: pd.Series) -> pd.Series:
     max_log = np.log1p(attempts).max()
     if max_log <= 0:
         return pd.Series(np.zeros(len(attempts)), index=attempts.index)
     return np.log1p(attempts) / max_log
-
 
 def _agg_stats(df: pd.DataFrame, group_cols: Iterable[str]) -> pd.DataFrame:
     grouped = df.groupby(list(group_cols), as_index=False).agg(
@@ -34,7 +30,6 @@ def _agg_stats(df: pd.DataFrame, group_cols: Iterable[str]) -> pd.DataFrame:
     grouped["RELIABILITY_WEIGHT"] = _reliability_weight(grouped["attempts"])
     return grouped
 
-
 def _build_level(
     df: pd.DataFrame,
     *,
@@ -44,7 +39,6 @@ def _build_level(
     out = _agg_stats(df, group_cols=group_cols)
     out["LEVEL"] = level
     return out
-
 
 def _prep_offense_defense(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     off = df.copy()
@@ -59,7 +53,6 @@ def _prep_offense_defense(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]
         deff = pd.DataFrame(columns=df.columns.tolist() + ["ROLE"])
 
     return off, deff
-
 
 def build_shot_aggregates(clean_df: pd.DataFrame) -> pd.DataFrame:
     off, deff = _prep_offense_defense(clean_df)
@@ -86,7 +79,6 @@ def build_shot_aggregates(clean_df: pd.DataFrame) -> pd.DataFrame:
     agg = pd.concat([by_shot_type, by_zone, by_shot_type_zone], ignore_index=True)
     return agg
 
-
 def build_league_baselines(agg_df: pd.DataFrame) -> pd.DataFrame:
     group_cols = ["ROLE", "LEVEL", "SEASON_STR"]
     keys = ["SHOT_TYPE", "ZONE"]
@@ -110,7 +102,6 @@ def build_league_baselines(agg_df: pd.DataFrame) -> pd.DataFrame:
     )
     league["LEAGUE_REL_WEIGHT"] = _reliability_weight(league["LEAGUE_ATTEMPTS"])
     return league
-
 
 def build_and_save_aggregates(
     *,
@@ -142,7 +133,6 @@ def build_and_save_aggregates(
     print(f"[shot_aggregates] Saved league baselines: {league_path}")
 
     return agg, league
-
 
 if __name__ == "__main__":
     build_and_save_aggregates()

@@ -1,5 +1,3 @@
-# backend/pbp_shots.py
-
 from __future__ import annotations
 
 import io
@@ -11,10 +9,7 @@ import numpy as np
 import pandas as pd
 from fastapi.responses import StreamingResponse
 
-
-# ---------------------------------------------------------------------
 # Paths + caching
-# ---------------------------------------------------------------------
 # We keep Dataset2 assets under:
 #   backend/data/pbp/
 # and cache under:
@@ -33,17 +28,8 @@ CANONICAL_PARQUET = _CACHE_DIR / "shots_canonical.parquet"
 # module-level cache (load once per process)
 _SHOTS_DF: Optional[pd.DataFrame] = None
 
-
 def _load_canonical_shots_df() -> pd.DataFrame:
-    """
-    Load canonical shots parquet once and normalize column names.
-
-    Downstream code (preview, csv, heatmap, rankers) expects these columns:
-      SEASON_STR, TEAM_ABBR, OPP_ABBR, SHOT_TYPE, ZONE, X, Y, IS_MAKE, POINTS
-
-    If your parquet uses alternate names, we rename here so the rest of the
-    backend stays stable.
-    """
+    """Load canonical shots parquet once and normalize column names."""
     global _SHOTS_DF
     if _SHOTS_DF is not None:
         return _SHOTS_DF
@@ -113,16 +99,10 @@ def _load_canonical_shots_df() -> pd.DataFrame:
     _SHOTS_DF = df
     return df
 
-
-# ---------------------------------------------------------------------
 # JSON safety: replace NaN/Inf recursively
-# ---------------------------------------------------------------------
 
 def _sanitize_json(obj: Any) -> Any:
-    """
-    FastAPI/JSON cannot encode NaN or Infinity.
-    This removes them from nested lists/dicts so the response never explodes.
-    """
+    """FastAPI/JSON cannot encode NaN or Infinity."""
     if obj is None:
         return None
     if isinstance(obj, (str, bool, int)):
@@ -142,7 +122,6 @@ def _sanitize_json(obj: Any) -> Any:
         return [_sanitize_json(v) for v in obj]
     return obj
 
-
 def _season_sort_key(s: str) -> int:
     # "2025-26" -> 2025, "2021-22" -> 2021
     try:
@@ -150,12 +129,8 @@ def _season_sort_key(s: str) -> int:
     except Exception:
         return -1
 
-
 def get_meta_options() -> Dict[str, Any]:
-    """
-    Returns dropdown options for Dataset2 shots explorer:
-      { seasons, teams, shotTypes, zones }
-    """
+    """Returns dropdown options for Dataset2 shots explorer:"""
     df = _load_canonical_shots_df()
 
     seasons = []
@@ -185,7 +160,6 @@ def get_meta_options() -> Dict[str, Any]:
         "metadata": {"source": str(CANONICAL_PARQUET.name)},
     }
 
-
 def _filter_df(
     df: pd.DataFrame,
     *,
@@ -214,12 +188,8 @@ def _filter_df(
 
     return out
 
-
 def _select_output_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Prefer a consistent "canonical preview schema" so the table looks stable.
-    If some columns don't exist, we just return whatever is present.
-    """
+    """Prefer a consistent "canonical preview schema" so the table looks stable."""
     preferred = [
         "SEASON_STR",
         "TEAM_ABBR",
@@ -237,7 +207,6 @@ def _select_output_cols(df: pd.DataFrame) -> pd.DataFrame:
     cols = [c for c in preferred if c in df.columns]
     return df[cols] if cols else df
 
-
 def get_shots_json(
     *,
     season: str,
@@ -247,12 +216,7 @@ def get_shots_json(
     zone: Optional[str],
     limit: int,
 ) -> Dict[str, Any]:
-    """
-    JSON preview for the Shots Explorer page.
-
-    IMPORTANT: frontend expects:
-      { columns: string[], rows: object[] }
-    """
+    """JSON preview for the Shots Explorer page."""
     df = _load_canonical_shots_df()
 
     filtered = _filter_df(
@@ -282,7 +246,6 @@ def get_shots_json(
         "metadata": {"source": str(CANONICAL_PARQUET.name)},
     }
 
-
 def get_shots_csv_response(
     *,
     season: str,
@@ -292,9 +255,7 @@ def get_shots_csv_response(
     zone: Optional[str],
     limit: int,
 ) -> StreamingResponse:
-    """
-    CSV export for Shots Explorer.
-    """
+    """CSV export for Shots Explorer."""
     df = _load_canonical_shots_df()
     filtered = _filter_df(
         df, season=season, team=team, opp=opp, shot_type=shot_type, zone=zone

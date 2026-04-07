@@ -1,19 +1,24 @@
-# backend/pbp_phase2_build.py
+"""Offline build script for Phase 2 caches (shot ML analysis, CV results).
+
+Build tooling — not imported by the running FastAPI app.
+"""
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
-from domain.shot_analysis.shot_ml_models import run_shot_model_cv
-from domain.shot_analysis.shot_ml_stat_analysis import compute_shot_ml_analysis
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
-# Must match your project rule: backend/data/pbp/cache/
-CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "pbp" / "cache"
+from domain.shot_analysis import run_shot_model_cv, compute_shot_ml_analysis
+
+CACHE_DIR = BACKEND_DIR / "data" / "pbp" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 ANALYSIS_CACHE = CACHE_DIR / "pbp_phase2_shot_ml_analysis.json"
 CV_CACHE = CACHE_DIR / "pbp_phase2_shot_model_cv.json"
-
 
 def main() -> None:
     import json
@@ -41,7 +46,7 @@ def main() -> None:
         "payload": sanitize(analysis),
     }
     ANALYSIS_CACHE.write_text(json.dumps(analysis_out, indent=2), encoding="utf-8")
-    print(f"✅ Wrote: {ANALYSIS_CACHE}")
+    print(f"Wrote: {ANALYSIS_CACHE}")
 
     t1 = time.time()
     summary_df, fold_df = run_shot_model_cv(n_splits=5, random_state=42)
@@ -75,10 +80,9 @@ def main() -> None:
         "fold_summary": sanitize(fold_df.to_dict(orient="records")),
     }
     CV_CACHE.write_text(json.dumps(cv_out, indent=2), encoding="utf-8")
-    print(f"✅ Wrote: {CV_CACHE}")
+    print(f"Wrote: {CV_CACHE}")
 
     print("Done.")
-
 
 if __name__ == "__main__":
     main()

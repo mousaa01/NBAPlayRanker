@@ -1,34 +1,11 @@
-# backend/nlp_explain.py
+"""Explanation generator for recommendation results."""
 from __future__ import annotations
-
-"""
-Deterministic explanation builder for "why these plays?"
-
-Design goals:
-- 100% defendable: uses ONLY provided metrics + parsed context (no guessing).
-- Flexible: works with slightly different response shapes from your existing endpoints.
-- No external dependencies (stdlib only).
-- Produces a clean JSON-friendly structure for your Gameplan UI.
-
-Typical usage:
-- You already have ranked recommendations from:
-    /rank-plays/baseline
-    /rank-plays/context-ml
-- Optionally you also have shotplan outputs from:
-    /shotplan/rank
-- This module turns those into:
-    - a short overall summary
-    - per-play explanation blocks (summary + evidence bullets + caution)
-"""
 
 from dataclasses import dataclass, asdict, field
 import math
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-
-# ----------------------------
 # Data structures
-# ----------------------------
 
 @dataclass(frozen=True)
 class PlayExplanation:
@@ -37,7 +14,6 @@ class PlayExplanation:
     evidence: List[str] = field(default_factory=list)
     caution: Optional[str] = None
     metrics_used: Dict[str, Any] = field(default_factory=dict)
-
 
 @dataclass(frozen=True)
 class ExplanationResult:
@@ -51,10 +27,7 @@ class ExplanationResult:
         # dataclasses convert nested dataclasses fine, but we ensure JSON-friendly types
         return d
 
-
-# ----------------------------
 # Helpers
-# ----------------------------
 
 def _is_number(x: Any) -> bool:
     try:
@@ -63,14 +36,11 @@ def _is_number(x: Any) -> bool:
     except Exception:
         return False
 
-
 def _to_float(x: Any) -> Optional[float]:
     return float(x) if _is_number(x) else None
 
-
 def _clamp(x: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, x)))
-
 
 def _fmt_clock(seconds: Optional[float]) -> Optional[str]:
     if seconds is None or not _is_number(seconds):
@@ -80,7 +50,6 @@ def _fmt_clock(seconds: Optional[float]) -> Optional[str]:
     mm = s // 60
     ss = s % 60
     return f"{mm}:{ss:02d}"
-
 
 def _fmt_pct(x: Optional[float]) -> Optional[str]:
     if x is None:
@@ -92,12 +61,10 @@ def _fmt_pct(x: Optional[float]) -> Optional[str]:
     v = _clamp(v, 0.0, 1.0)
     return f"{v * 100:.0f}%"
 
-
 def _fmt_ppp(x: Optional[float]) -> Optional[str]:
     if x is None:
         return None
     return f"{float(x):.2f} PPP"
-
 
 def _first_present(d: Dict[str, Any], keys: Sequence[str]) -> Optional[Any]:
     for k in keys:
@@ -105,16 +72,8 @@ def _first_present(d: Dict[str, Any], keys: Sequence[str]) -> Optional[Any]:
             return d[k]
     return None
 
-
 def _coerce_rankings(obj: Any) -> List[Dict[str, Any]]:
-    """
-    Accepts a list of dicts OR a response dict with common wrappers:
-    - {rankings: [...]}
-    - {results: [...]}
-    - {data: [...]}
-    - {items: [...]}
-    Returns a list[dict].
-    """
+    """Accepts a list of dicts OR a response dict with common wrappers:"""
     if obj is None:
         return []
     if isinstance(obj, list):
@@ -129,11 +88,8 @@ def _coerce_rankings(obj: Any) -> List[Dict[str, Any]]:
             return [obj]
     return []
 
-
 def _play_name(play: Dict[str, Any]) -> str:
-    """
-    Try several common keys for a human-readable play label.
-    """
+    """Try several common keys for a human-readable play label."""
     for k in ("play_type", "playType", "play", "name", "action", "label", "type"):
         v = play.get(k)
         if isinstance(v, str) and v.strip():
@@ -146,10 +102,7 @@ def _play_name(play: Dict[str, Any]) -> str:
             return v.strip()
     return "Unknown Play"
 
-
-# ----------------------------
 # Metric extraction (flexible key mapping)
-# ----------------------------
 
 # Efficiency / expected points per possession
 _EFF_KEYS = (
@@ -201,12 +154,8 @@ _COUNT_KEYS = (
 _TOV_KEYS = ("tov", "turnover_rate", "to_rate", "TOV_RATE", "turnovers")
 _FOUL_KEYS = ("foul_rate", "ft_rate", "FTA_RATE", "ftr", "free_throw_rate")
 
-
 def _extract_metrics(play: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Extract a normalized set of key metrics if present.
-    Only includes values that exist in the input.
-    """
+    """Extract a normalized set of key metrics if present."""
     eff = _to_float(_first_present(play, _EFF_KEYS))
     delta = _to_float(_first_present(play, _DELTA_KEYS))
     ctx_adj = _to_float(_first_present(play, _CTX_ADJ_KEYS))
@@ -243,16 +192,10 @@ def _extract_metrics(play: Dict[str, Any]) -> Dict[str, Any]:
 
     return out
 
-
-# ----------------------------
 # Context summarization
-# ----------------------------
 
 def summarize_context(context: Dict[str, Any]) -> str:
-    """
-    Build a short, human-readable summary of the parsed context.
-    Uses only fields that exist.
-    """
+    """Build a short, human-readable summary of the parsed context."""
     parts: List[str] = []
 
     period = context.get("period")
@@ -305,15 +248,10 @@ def summarize_context(context: Dict[str, Any]) -> str:
 
     return " • ".join(parts) if parts else "Game context"
 
-
-# ----------------------------
 # Explanation generation
-# ----------------------------
 
 def _context_intent_sentence(context: Dict[str, Any]) -> str:
-    """
-    A single sentence describing the objective implied by context.
-    """
+    """A single sentence describing the objective implied by context."""
     need = context.get("need")
     if need == "need3":
         return "Priority is generating a clean 3-point look quickly."
@@ -332,11 +270,8 @@ def _context_intent_sentence(context: Dict[str, Any]) -> str:
         return "Priority is getting a quality shot quickly while managing the clock."
     return "Recommendations are selected to maximize expected efficiency for the given situation."
 
-
 def _choose_caution(context: Dict[str, Any], play_metrics: Dict[str, Any]) -> Optional[str]:
-    """
-    Deterministic caution based on known signals.
-    """
+    """Deterministic caution based on known signals."""
     need = context.get("need")
     defense_style = context.get("defense_style")
 
@@ -359,11 +294,8 @@ def _choose_caution(context: Dict[str, Any], play_metrics: Dict[str, Any]) -> Op
 
     return None
 
-
 def _evidence_bullets(context: Dict[str, Any], m: Dict[str, Any]) -> List[str]:
-    """
-    Build up to ~3 evidence bullets using only available metrics.
-    """
+    """Build up to ~3 evidence bullets using only available metrics."""
     bullets: List[str] = []
 
     ppp = _to_float(m.get("ppp"))
@@ -413,17 +345,8 @@ def _evidence_bullets(context: Dict[str, Any], m: Dict[str, Any]) -> List[str]:
     # Keep at most 3-4 bullets; UI-friendly
     return bullets[:4]
 
-
 def _format_top_factors(tf: Any, max_items: int = 3) -> Optional[str]:
-    """
-    Attempt to format top explanatory factors from common shapes.
-    We DO NOT fabricate direction/magnitude if not present.
-
-    Supported shapes:
-    - [{"feature": "...", "direction": "+", "value": 0.12}, ...]
-    - [("feature", 0.12), ...]
-    - ["featureA", "featureB", ...]
-    """
+    """Attempt to format top explanatory factors from common shapes."""
     items: List[str] = []
 
     if isinstance(tf, list):
@@ -445,14 +368,11 @@ def _format_top_factors(tf: Any, max_items: int = 3) -> Optional[str]:
         return None
     return ", ".join(items)
 
-
 def explain_play(
     play: Dict[str, Any],
     context: Dict[str, Any],
 ) -> PlayExplanation:
-    """
-    Build a deterministic explanation for one play.
-    """
+    """Build a deterministic explanation for one play."""
     name = _play_name(play)
     metrics = _extract_metrics(play)
 
@@ -474,23 +394,13 @@ def explain_play(
         metrics_used=metrics,
     )
 
-
 def explain_recommendations(
     context: Dict[str, Any],
     ranked_context: Any,
     ranked_baseline: Any = None,
     top_k: int = 5,
 ) -> ExplanationResult:
-    """
-    Build an overall explanation package from ranked play outputs.
-    Accepts either:
-      - list[dict]
-      - dict wrapper: {"rankings":[...]} etc.
-
-    ranked_baseline is optional; if you already compute deltas in your pipeline,
-    you can omit it. If baseline is provided and the plays share identifiers,
-    you can compute additional notes (we keep this conservative).
-    """
+    """Build an overall explanation package from ranked play outputs."""
     ctx_summary = summarize_context(context)
     overall = _context_intent_sentence(context)
 
@@ -540,20 +450,10 @@ def explain_recommendations(
         notes=notes,
     )
 
-
-# ----------------------------
 # Optional shot-plan explanation (if you want it)
-# ----------------------------
 
 def explain_shotplan(context: Dict[str, Any], shotplan: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Deterministic explanation for shot-plan output.
-    This is optional and safe: if keys aren't present, we simply omit.
-
-    Expected shotplan keys vary by implementation; we attempt common ones:
-    - shot_type, zone, shooter
-    - ppp / expected_ppp / expected_value
-    """
+    """Deterministic explanation for shot-plan output."""
     out: Dict[str, Any] = {}
     if not isinstance(shotplan, dict):
         return out
@@ -588,38 +488,4 @@ def explain_shotplan(context: Dict[str, Any], shotplan: Dict[str, Any]) -> Dict[
 
     return out
 
-
-# ----------------------------
 # Quick manual demo
-# ----------------------------
-
-if __name__ == "__main__":
-    # Example context from nlp_parser.py
-    context_demo = {
-        "period": 4,
-        "time_remaining": 28,
-        "margin": -3,
-        "need": "quick2",
-        "defense_style": "switch",
-        "pace": "push",
-    }
-
-    # Example ranked outputs (shape-agnostic)
-    ranked_context_demo = {
-        "rankings": [
-            {"play_type": "P&R Ball Handler", "PPP_PRED": 1.08, "freq": 0.21, "CONTEXT_ADJ": 0.06},
-            {"play_type": "Post Up", "PPP_PRED": 1.02, "freq": 0.12},
-            {"play_type": "Spot Up", "PPP_PRED": 0.98, "freq": 0.18, "tov": 0.10},
-        ]
-    }
-
-    ranked_baseline_demo = {
-        "rankings": [
-            {"play_type": "P&R Ball Handler", "ppp": 1.01},
-            {"play_type": "Post Up", "ppp": 1.00},
-            {"play_type": "Spot Up", "ppp": 0.99},
-        ]
-    }
-
-    res = explain_recommendations(context_demo, ranked_context_demo, ranked_baseline_demo, top_k=3)
-    print(res.to_dict())

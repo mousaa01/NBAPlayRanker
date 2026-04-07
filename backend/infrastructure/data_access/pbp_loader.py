@@ -1,17 +1,4 @@
-"""backend/pbp_loader.py
-
-Dataset2 loader (Phase 1).
-
-Provides a fast, single-process cache of the *canonical* (snake_case) shots
-dataset produced by `pbp_clean.ensure_canonical_parquet`.
-
-Design goals:
-- Load parquet once per backend process.
-- If the underlying cache file changes (rebuilt), reload automatically.
-
-This will be used by `/pbp/*` endpoints in Phase 2.
-"""
-
+"""Play-by-play data loader."""
 from __future__ import annotations
 
 from typing import Optional
@@ -22,10 +9,8 @@ from .pbp_constants import CANONICAL_META_JSON, CANONICAL_PARQUET
 from .pbp_cache import read_json
 from .pbp_clean import ensure_canonical_parquet
 
-
 _CANONICAL_DF: Optional[pd.DataFrame] = None
 _CANONICAL_ID: Optional[str] = None
-
 
 def _current_cache_id() -> Optional[str]:
     meta = read_json(CANONICAL_META_JSON)
@@ -39,14 +24,8 @@ def _current_cache_id() -> Optional[str]:
     except Exception:
         return None
 
-
 def get_pbp_canonical_df(*, ensure: bool = True, force_rebuild: bool = False) -> pd.DataFrame:
-    """Return the canonical shots dataframe (snake_case), cached in memory.
-
-    Args:
-      ensure: if True, build canonical cache on demand when missing.
-      force_rebuild: if True and ensure=True, rebuild canonical cache before loading.
-    """
+    """Return the canonical shots dataframe (snake_case), cached in memory."""
 
     global _CANONICAL_DF, _CANONICAL_ID
 
@@ -66,7 +45,6 @@ def get_pbp_canonical_df(*, ensure: bool = True, force_rebuild: bool = False) ->
         _CANONICAL_ID = cache_id
 
     return _CANONICAL_DF
-
 
 def clear_pbp_canonical_cache() -> None:
     """Clear the in-memory canonical dataframe cache (useful for tests/dev)."""

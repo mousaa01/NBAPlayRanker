@@ -24,6 +24,8 @@ build/
 backend/data/synergy_chunks/
 
 .env.local
+.env
+
 # Large datasets / artifacts
 backend/data/pbp/*.parquet
 *.zip
@@ -33,3 +35,5 @@ backend/data/pbp/*.parquet
 *.zip
 
 /Notebook
+
+shotplan_preview.pdf

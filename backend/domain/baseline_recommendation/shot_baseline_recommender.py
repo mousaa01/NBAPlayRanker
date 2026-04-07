@@ -1,29 +1,26 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from domain.baseline_recommendation.interfaces import IShotBaselineRecommender
 from domain.shot_analysis.shot_aggregates import AGG_PARQUET
 
 LEAGUE_PARQUET = AGG_PARQUET.with_name("shots_agg_league.parquet")
-
 
 def _require_in(value: str, allowed: List[str], label: str) -> None:
     if value not in allowed:
         raise ValueError(f"Unknown {label} '{value}'. Allowed: {allowed}")
 
-
 def _df_to_records(df: pd.DataFrame) -> List[Dict[str, object]]:
     clean = df.replace({np.nan: None})
     return clean.to_dict(orient="records")
 
-
 def _shrink_eva(team_epa: pd.Series, league_epa: pd.Series, rel: pd.Series) -> pd.Series:
     return rel * team_epa + (1 - rel) * league_epa
-
 
 def _rank_level(
     *,
@@ -101,7 +98,6 @@ def _rank_level(
     cols = [c for c in cols if c in merged.columns]
     return merged[cols].copy()
 
-
 def rank_shot_plan_baseline(
     *,
     agg_df: pd.DataFrame,
@@ -152,11 +148,8 @@ def rank_shot_plan_baseline(
         "top_zones": _df_to_records(top_zones),
     }
 
-
-class ShotBaselineRecommender:
-    """
-    Loads shots_agg.parquet + shots_agg_league.parquet once, provides ranking.
-    """
+class ShotBaselineRecommender(IShotBaselineRecommender):
+    """Loads shots_agg.parquet + shots_agg_league.parquet once, provides ranking."""
 
     def __init__(self, agg_path: Path = AGG_PARQUET, league_path: Path = LEAGUE_PARQUET):
         agg_path = Path(agg_path)
@@ -168,11 +161,8 @@ class ShotBaselineRecommender:
 
         self.agg_df = pd.read_parquet(agg_path)
         self.league_df = pd.read_parquet(league_path)
-
-        # -----------------------------------------------------------------
         # ADDED: lightweight meta caches for dropdowns (no parquet scans later)
         # Used by /pbp/meta/options (and any other UI dropdown needs)
-        # -----------------------------------------------------------------
         self.available_seasons: List[str] = (
             sorted(self.agg_df["SEASON_STR"].dropna().astype(str).unique().tolist())
             if "SEASON_STR" in self.agg_df.columns

@@ -10,25 +10,23 @@ import {
   contextRank,
   fetchMetaOptions,
   fetchPlaytypeViz,
+  postJson,
+  type MetaOptions,
+} from "../../../services/recommendation";
+import {
   fetchShotHeatmap,
   fetchShotPlanRank,
   getShotPlanPdfUrl,
-  type MetaOptions,
-} from "../../../utils";
-
-type TeamOption = { code: string; name?: string };
-
-type NormalizedPlay = {
-  id: string;
-  playType: string;
-  ppp: number | null;
-  edge: number | null;
-  offense: number | null;
-  defense: number | null;
-  why: string[];
-  source: "smart" | "baseline";
-  raw: any;
-};
+  authenticatedDownload,
+} from "../../../services/shotAnalysis";
+import { gradeFromRank, coachingCuesFor, counterPlanFor } from "../../../domain/coaching-knowledge";
+import {
+  normalizeTeams,
+  normalizeWhy,
+  normalizePlay,
+  type NormalizedPlay,
+  type TeamOption,
+} from "../../../services/gameplan";
 
 type PlanItem = { id: string; label: string };
 
@@ -84,154 +82,11 @@ function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
-function toNumMaybe(v: any): number | null {
-  if (v === null || v === undefined) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function normalizeTeams(meta: MetaOptions | null): TeamOption[] {
-  const teams = (meta?.teams ?? []) as any[];
-  const teamNames = (meta?.teamNames ?? {}) as Record<string, string>;
-  return teams
-    .map((t) => String(t))
-    .filter(Boolean)
-    .map((code) => ({ code, name: teamNames[code] }));
-}
-
-function normalizeWhy(raw: any): string[] {
-  const w =
-    raw?.why ??
-    raw?.rationale ??
-    raw?.RATIONALE ??
-    raw?.explanation ??
-    raw?.reasoning ??
-    raw?.notes ??
-    null;
-
-  if (!w) return [];
-  if (Array.isArray(w))
-    return w
-      .map((x) => String(x))
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-  if (typeof w === "string") {
-    const text = w.replace(/\r/g, "");
-    const lines = text.split("\n");
-
-    const out: string[] = [];
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      // Split bullet separators within the line.
-      const parts = trimmed
-        .split(/(?:•|·|\u2022)/g)
-        .map((p) => p.trim())
-        .filter(Boolean)
-        .map((p) => (p.startsWith("-") ? p.replace(/^\-+\s*/, "") : p))
-        .filter(Boolean);
-
-      if (parts.length) out.push(...parts);
-      else out.push(trimmed.replace(/^\-+\s*/, ""));
-    }
-
-    // If we still have one big string with hyphen bullets, try a light split.
-    if (out.length <= 1 && text.includes(" - ")) {
-      return text
-        .split(" - ")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-    }
-
-    return out;
-  }
-
-  return [];
-}
-
-function normalizePlay(
-  raw: any,
-  idx: number,
-  source: "smart" | "baseline"
-): NormalizedPlay {
-  const playType =
-    raw?.PLAY_TYPE ??
-    raw?.play_type ??
-    raw?.playType ??
-    raw?.play ??
-    raw?.name ??
-    raw?.label ??
-    `Play ${idx + 1}`;
-
-  // Headline points-per-play.
-  const ppp =
-    toNumMaybe(raw?.PPP_CONTEXT) ??
-    toNumMaybe(raw?.PPP_PRED) ??
-    toNumMaybe(raw?.PPP_ML_BLEND) ??
-    toNumMaybe(raw?.ppp) ??
-    toNumMaybe(raw?.pred_ppp) ??
-    null;
-
-  // Edge / advantage stat for secondary display.
-  const edge =
-    toNumMaybe(raw?.DELTA_VS_BASELINE) ??
-    toNumMaybe(raw?.PPP_GAP) ??
-    toNumMaybe(raw?.edge) ??
-    null;
-
-  const offense =
-    toNumMaybe(raw?.PPP_ML_BLEND) ??
-    toNumMaybe(raw?.PPP_OFF_SHRUNK) ??
-    toNumMaybe(raw?.offense) ??
-    null;
-
-  const defense =
-    toNumMaybe(raw?.PPP_BASELINE) ??
-    toNumMaybe(raw?.PPP_DEF_SHRUNK) ??
-    toNumMaybe(raw?.defense) ??
-    null;
-
-  const why = normalizeWhy(raw);
-
-  return {
-    id: `${String(playType)}__${idx}__${source}`,
-    playType: String(playType),
-    ppp,
-    edge,
-    offense,
-    defense,
-    why,
-    source,
-    raw,
-  };
-}
-
-async function postJson<T>(url: string, body: any): Promise<T> {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-  });
-  if (!r.ok) {
-    const text = await r.text().catch(() => "");
-    throw new Error(`${r.status} ${r.statusText}${text ? ` — ${text}` : ""}`);
-  }
-  return (await r.json()) as T;
-}
-
 function prettyTime(seconds: number) {
   const s = clamp(seconds, 0, 720);
   const m = Math.floor(s / 60);
   const r = s % 60;
   return `${m}:${String(r).padStart(2, "0")}`;
-}
-
-function gradeFromRank(rank: number) {
-  if (rank === 0) return "A";
-  if (rank === 1) return "B";
-  return "C";
 }
 
 function safeLocalGet(key: string) {
@@ -248,91 +103,6 @@ function safeLocalSet(key: string, value: string) {
   } catch {
     // ignore
   }
-}
-
-function coachingCuesFor(playType: string): string[] {
-  const p = playType.toLowerCase();
-
-  if (p.includes("pr") || p.includes("pick") || p.includes("roll")) {
-    return [
-      "Screen: be still and hit the defender’s path.",
-      "Ball: get shoulder-to-hip and force 2 defenders to react.",
-      "Roll: sprint to the rim with hands ready.",
-    ];
-  }
-  if (p.includes("spot")) {
-    return [
-      "Be shot-ready on the catch (feet set, hands ready).",
-      "Attack closeouts with 1–2 dribbles max.",
-      "If help comes, make the simple kick-out.",
-    ];
-  }
-  if (p.includes("transition")) {
-    return [
-      "Run wide lanes: first big to rim, second to trail.",
-      "Get an early paint touch → then spray to shooters.",
-      "If nothing early, flow right into a ball-screen.",
-    ];
-  }
-  if (p.includes("isolation") || p.includes("iso")) {
-    return [
-      "Clear a side and hold corners (spacing is the play).",
-      "Get to your first advantage move quickly (no dancing).",
-      "If help comes, kick early and re-attack.",
-    ];
-  }
-  if (p.includes("handoff") || p.includes("dh")) {
-    return [
-      "Sell the handoff and turn the corner tight.",
-      "Big: flip and screen if the defender recovers.",
-      "Weakside: stay spaced, ready for the skip pass.",
-    ];
-  }
-  if (p.includes("post")) {
-    return [
-      "Seal first: high-to-low, show a clear target hand.",
-      "Perimeter: cut hard when your defender turns their head.",
-      "If doubled, pass out early and relocate.",
-    ];
-  }
-
-  return [
-    "Keep spacing (corners & slots) to open driving lanes.",
-    "First read fast: rim → kick → swing.",
-    "If the defense loads up, move it with one extra pass.",
-  ];
-}
-
-function counterPlanFor(playType: string) {
-  const base = playType.toLowerCase();
-  const isPnR = base.includes("pick") || base.includes("roll") || base.includes("pr");
-
-  return [
-    {
-      title: "If they switch…",
-      trigger: "When their big ends up on our ball handler (or they switch everything).",
-      cues: isPnR
-        ? ["Re-screen quickly (flip it).", "Hit the slip early.", "Attack the mismatch with pace."]
-        : ["Get into a quick re-screen.", "Cut behind help.", "Throw the skip if they load up."],
-      outcome: "Goal: create a mismatch or force help.",
-    },
-    {
-      title: "If they go under…",
-      trigger: "When the on-ball defender ducks under the screen.",
-      cues: isPnR
-        ? ["Re-screen higher (pull-up space).", "Use a handoff into flow.", "Punish with the catch-and-shoot."]
-        : ["Shorten the route for a quick shot.", "Sprint into a second action.", "Keep the ball moving."],
-      outcome: "Goal: get a clean rhythm shot.",
-    },
-    {
-      title: "If they trap/hedge…",
-      trigger: "When they send two to the ball to take away the first option.",
-      cues: isPnR
-        ? ["Hit the short roll.", "Corners stay lifted for the skip.", "One more pass = open shot."]
-        : ["Flash middle as an outlet.", "Quick swing to the weak side.", "Attack the closeout."],
-      outcome: "Goal: beat the trap with spacing + quick pass.",
-    },
-  ];
 }
 
 function Chip({
@@ -1335,9 +1105,10 @@ export default function GameplanClient() {
                   {shotLoading ? "Loading…" : "Show heatmap"}
                 </button>
 
-                <a
+                <button
                   className={styles.btnSoft}
-                  href={getShotPlanPdfUrl({
+                  type="button"
+                  onClick={() => authenticatedDownload(getShotPlanPdfUrl({
                     season,
                     our,
                     opp,
@@ -1345,12 +1116,10 @@ export default function GameplanClient() {
                     wOff,
                     shotType: selectedShotType || undefined,
                     zone: selectedZone || undefined,
-                  })}
-                  target="_blank"
-                  rel="noreferrer"
+                  })).catch(e => alert(e))}
                 >
                   Export PDF
-                </a>
+                </button>
               </div>
 
               <div className={styles.miniInputs} style={{ marginTop: 10 }}>

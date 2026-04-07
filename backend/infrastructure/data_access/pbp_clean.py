@@ -1,19 +1,4 @@
-"""backend/pbp_clean.py
-
-Phase 1 Dataset2 ingestion + canonicalization.
-
-What already exists in repo:
-- `backend/shot_etl.py` builds `backend/data/pbp/shots_clean.parquet` (uppercase columns)
-  from the raw parquet `backend/data/pbp/nba_pbp_2021_present.parquet`.
-
-What this module adds:
-- A deterministic *canonical* (snake_case) version cached under:
-    backend/data/pbp/cache/shots_canonical.parquet
-- Cache metadata so we rebuild only when inputs/logic change.
-
-The canonical dataset is what we will use for the new `/pbp/*` endpoints in Phase 2.
-"""
-
+"""Play-by-play data cleaning pipeline."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,7 +25,6 @@ from .pbp_cache import (
     write_parquet_atomic,
 )
 
-
 CANONICAL_COLUMNS: List[str] = [
     # identifiers
     "season",
@@ -65,7 +49,6 @@ CANONICAL_COLUMNS: List[str] = [
     "angle",
 ]
 
-
 def _resolve_source_parquet() -> Path:
     """Resolve the raw parquet path the same way shot_etl does."""
     if SOURCE_PARQUET.exists():
@@ -78,19 +61,16 @@ def _resolve_source_parquet() -> Path:
         "Place it at backend/data/pbp/nba_pbp_2021_present.parquet"
     )
 
-
 def ensure_clean_parquet(*, force_rebuild: bool = False) -> Path:
     """Ensure `shots_clean.parquet` exists (uppercase schema used by existing endpoints)."""
     if CLEAN_PARQUET.exists() and not force_rebuild:
         return CLEAN_PARQUET
 
-    from domain.shot_analysis.shot_etl import build_shots_dataset
-
-    src = _resolve_source_parquet()
-    ensure_dir(CLEAN_PARQUET.parent)
-    build_shots_dataset(parquet_path=src, output_path=CLEAN_PARQUET)
-    return CLEAN_PARQUET
-
+    raise FileNotFoundError(
+        f"shots_clean.parquet not found at {CLEAN_PARQUET}.\n"
+        "Run the ETL pipeline first:\n"
+        "  python backend/data/etl/build_pbp_pipeline.py"
+    )
 
 def build_canonical_from_clean(clean_df: pd.DataFrame) -> pd.DataFrame:
     """Convert the existing uppercase clean shots table to a stable snake_case schema."""
@@ -167,7 +147,6 @@ def build_canonical_from_clean(clean_df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-
 def ensure_canonical_parquet(*, force_rebuild: bool = False) -> Path:
     """Ensure the canonical (snake_case) dataset exists and is up-to-date."""
 
@@ -202,7 +181,6 @@ def ensure_canonical_parquet(*, force_rebuild: bool = False) -> Path:
     write_json_atomic(CANONICAL_META_JSON, meta)
 
     return CANONICAL_PARQUET
-
 
 def load_canonical_df(*, force_rebuild: bool = False) -> pd.DataFrame:
     """Convenience function used by scripts/tests."""

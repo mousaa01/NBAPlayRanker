@@ -4,7 +4,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { fetchMetaOptions, fetchPbpMetaOptions, fetchShotHeatmap } from "../../../utils";
+import { fetchMetaOptions, fetchPbpMetaOptions, fetchShotHeatmap } from "../../../services/shotAnalysis";
 
 type Meta = {
   seasons: string[];

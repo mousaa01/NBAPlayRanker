@@ -3,7 +3,9 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Dict, List, Tuple
+
+from domain.baseline_recommendation.interfaces import IBaselineRecommender
 
 # Stats that are averaged using possessions (POSS) as weights.
 #
@@ -21,20 +23,8 @@ WEIGHT_COLS = [
     "PLUSONE_POSS_PCT",
 ]
 
-
 def build_team_playtype_tables(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aggregate Synergy player-level data into TEAM-level play-type rows.
-
-    Returns one row per:
-      (SEASON, TEAM_ABBREVIATION, TEAM_NAME, PLAY_TYPE, SIDE)
-
-    SIDE is derived from Synergy's TYPE_GROUPING:
-      - Offensive -> "offense"
-      - Defensive -> "defense"
-
-    Output columns include totals (POSS, POSS_PCT, etc.) and weighted averages (PPP, eFG%, TOV%, etc.).
-    """
+    """Aggregate Synergy player-level data into TEAM-level play-type rows."""
     df = raw_df.copy()
 
     # Map Synergy's TYPE_GROUPING to a simple SIDE flag.
@@ -68,27 +58,15 @@ def build_team_playtype_tables(raw_df: pd.DataFrame) -> pd.DataFrame:
     team_df = df.groupby(group_cols, as_index=False).apply(agg_func)
     return team_df
 
-
 def add_team_reliability_weights(team_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add RELIABILITY_WEIGHT in [0, 1] based on log1p(POSS).
-
-    Interpretation:
-      - Higher possessions => more reliable => closer to 1
-      - Lower possessions => less reliable => closer to 0
-    """
+    """Add RELIABILITY_WEIGHT in [0, 1] based on log1p(POSS)."""
     result = team_df.copy()
     max_log = np.log1p(result["POSS"]).max()
     result["RELIABILITY_WEIGHT"] = np.log1p(result["POSS"]) / max_log if max_log > 0 else 0.0
     return result
 
-
 def build_league_averages(team_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Build league-average stats per (SEASON, PLAY_TYPE, SIDE).
-
-    Uses possession-weighted averages across all teams.
-    """
+    """Build league-average stats per (SEASON, PLAY_TYPE, SIDE)."""
     group_cols = ["SEASON", "PLAY_TYPE", "SIDE"]
 
     def agg(group: pd.DataFrame) -> pd.Series:
@@ -104,19 +82,12 @@ def build_league_averages(team_df: pd.DataFrame) -> pd.DataFrame:
     league_df["RELIABILITY_WEIGHT"] = np.log1p(league_df["LEAGUE_POSS"]) / max_log if max_log > 0 else 0.0
     return league_df
 
-
 def prepare_baseline_tables(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Full baseline ETL pipeline:
-      1) Player -> Team aggregation
-      2) Reliability weights
-      3) League averages (anchors for shrinkage)
-    """
+    """Full baseline ETL pipeline:"""
     team_df = build_team_playtype_tables(raw_df)
     team_df = add_team_reliability_weights(team_df)
     league_df = build_league_averages(team_df)
     return team_df, league_df
-
 
 def rank_playtypes_baseline(
     team_df: pd.DataFrame,
@@ -128,18 +99,7 @@ def rank_playtypes_baseline(
     w_off: float = 0.7,
     w_def: float = 0.3,
 ) -> pd.DataFrame:
-    """
-    Rank play types for a matchup using an explainable baseline model.
-
-    Core idea (transparent and defendable):
-      - Take our offensive PPP by play type, opponent defensive PPP allowed by play type.
-      - Shrink each toward league averages using reliability weights (fixes small-sample noise).
-      - Combine into one predicted PPP score (PPP_PRED).
-      - Sort and return top-k.
-
-    Returns a DataFrame ready for the frontend table + breakdown.
-    """
-    # ---- Validation ----
+    """Rank play types for a matchup using an explainable baseline model."""
     valid_seasons = set(team_df["SEASON"].unique())
     if season not in valid_seasons:
         raise ValueError(f"Unknown season '{season}'. Valid seasons: {sorted(valid_seasons)}")
@@ -151,8 +111,6 @@ def rank_playtypes_baseline(
         raise ValueError(f"Unknown opp_team '{opp_team}'.")
     if not (1 <= k <= 10):
         raise ValueError("k must be between 1 and 10.")
-
-    # ---- Slice offense/defense tables ----
     off = team_df.query(
         "SEASON == @season and TEAM_ABBREVIATION == @our_team and SIDE == 'offense'"
     ).copy()
@@ -163,8 +121,6 @@ def rank_playtypes_baseline(
 
     if off.empty or deff.empty:
         raise ValueError("No data for this matchup (offense or defense table is empty).")
-
-    # ---- League anchors (used for shrinkage) ----
     league_off = league_df.query(
         "SEASON == @season and SIDE == 'offense'"
     )[["PLAY_TYPE", "PPP"]].rename(columns={"PPP": "PPP_LEAGUE_OFF"})
@@ -187,8 +143,6 @@ def rank_playtypes_baseline(
             "TOV_POSS_PCT",
         ]
     ].copy()
-
-    # ---- Merge offense + defense on play type ----
     merged = off.merge(
         deff_subset,
         on="PLAY_TYPE",
@@ -203,8 +157,6 @@ def rank_playtypes_baseline(
     # Add league anchors per play type
     merged = merged.merge(league_off, on="PLAY_TYPE", how="left")
     merged = merged.merge(league_def, on="PLAY_TYPE", how="left")
-
-    # ---- Shrinkage (stabilize small samples) ----
     #
     # PPP_SHRUNK = REL * PPP_TEAM + (1-REL) * PPP_LEAGUE
     rel_off = merged["RELIABILITY_WEIGHT_OFF"]
@@ -212,8 +164,6 @@ def rank_playtypes_baseline(
 
     merged["PPP_OFF_SHRUNK"] = rel_off * merged["PPP_OFF"] + (1 - rel_off) * merged["PPP_LEAGUE_OFF"]
     merged["PPP_DEF_SHRUNK"] = rel_def * merged["PPP_DEF"] + (1 - rel_def) * merged["PPP_LEAGUE_DEF"]
-
-    # ---- Predicted matchup PPP ----
     #
     # PPP_PRED = w_off * PPP_OFF_SHRUNK
     #          + w_def * (2*PPP_LEAGUE_OFF - PPP_DEF_SHRUNK)
@@ -228,8 +178,6 @@ def rank_playtypes_baseline(
 
     # Simple explainable gap (coach-friendly)
     merged["PPP_GAP"] = merged["PPP_OFF_SHRUNK"] - merged["PPP_DEF_SHRUNK"]
-
-    # ---- Sort + rationale ----
     merged = merged.sort_values(["PPP_PRED", "POSS_OFF"], ascending=[False, False])
 
     def build_rationale(row: pd.Series) -> str:
@@ -244,8 +192,6 @@ def rank_playtypes_baseline(
         )
 
     merged["RATIONALE"] = merged.apply(build_rationale, axis=1)
-
-    # ---- Output columns (IMPORTANT) ----
     #
     # These columns are used by the updated frontend Matchup/Baseline page to show a full breakdown.
     cols = [
@@ -275,14 +221,8 @@ def rank_playtypes_baseline(
     cols = [c for c in cols if c in merged.columns]
     return merged.head(k)[cols].reset_index(drop=True)
 
-
-class BaselineRecommender:
-    """
-    Simple wrapper used by the API:
-      - Loads Synergy CSV once
-      - Builds team_df + league_df once
-      - Exposes `rank()` and keeps tables available for other modules
-    """
+class BaselineRecommender(IBaselineRecommender):
+    """Simple wrapper used by the API:"""
 
     def __init__(self, synergy_csv_path: str):
         synergy_csv_path = Path(synergy_csv_path)
@@ -296,10 +236,3 @@ class BaselineRecommender:
         return rank_playtypes_baseline(
             self.team_df, self.league_df, season, our_team, opp_team, k=k
         )
-
-
-if __name__ == "__main__":
-    # Quick smoke test
-    csv_path = "data/synergy_playtypes_2019_2025_players.csv"
-    rec = BaselineRecommender(csv_path)
-    print(rec.rank("2019-20", "LAL", "BOS", k=5))

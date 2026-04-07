@@ -2,26 +2,7 @@
 
 from __future__ import annotations
 
-"""
-backend/ml_context_recommender.py
-
-Purpose (defense-friendly):
-- Keep the “Context + ML” logic in one place so architecture is clear.
-- Provide a reusable helper for the AI use case:
-    (ML offense prediction) + (opponent defense shrinkage) + (small context adjustments)
-
-NOTE:
-- Your FastAPI endpoint /rank-plays/context-ml in backend/app.py already implements this logic.
-- This module mirrors the same approach so you can:
-    (a) import and reuse it in app.py later, OR
-    (b) show the committee clean module boundaries in your architecture.
-
-Outputs match what the Context Simulator UI expects:
-- PPP_ML_BLEND, PPP_BASELINE, PPP_CONTEXT
-- CONTEXT_ADJ breakdown (BONUS_QUICK, BONUS_SCORE, PENALTY_PROTECT)
-- Factors (LATE_GAME_FACTOR, TRAILING_FACTOR, LEADING_FACTOR)
-- RATIONALE strings for explainability (committee requirement)
-"""
+"""Context-aware ML recommendation pipeline."""
 
 from pathlib import Path
 from typing import Dict, Tuple
@@ -29,25 +10,13 @@ from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 
-from ..baseline_recommendation.baseline_recommender import BaselineRecommender
-
-# ---------------------------------------------------------------------
-# Data paths
-# ---------------------------------------------------------------------
+from domain.baseline_recommendation import BaselineRecommender
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 SYNERGY_CSV_PATH = DATA_DIR / "synergy_playtypes_2019_2025_players.csv"
 ML_PRED_PATH = DATA_DIR / "ml_offense_ppp_predictions.csv"
 
-# ---------------------------------------------------------------------
-# Cache baseline tables once (multi-user friendly if imported by API)
-# ---------------------------------------------------------------------
-
 _rec = BaselineRecommender(str(SYNERGY_CSV_PATH))
-
-# ---------------------------------------------------------------------
-# Context weights (small hand-crafted priorities; explainable + stable)
-# ---------------------------------------------------------------------
 
 QUICK_WEIGHTS: Dict[str, float] = {
     "Spotup": 1.0,
@@ -57,37 +26,19 @@ QUICK_WEIGHTS: Dict[str, float] = {
 }
 
 
-# ---------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------
-
-
 def _clamp(x: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, x)))
 
-
 def total_time_remaining(period: int, time_remaining_period_sec: float) -> float:
-    """
-    Total seconds remaining in regulation (4x12). OT is treated as 0 remaining.
-
-    period: 1–4 regular, 5 OT in our app.
-    time_remaining_period_sec: seconds left in the current period (0–720)
-    """
+    """Total seconds remaining in regulation (4x12). OT is treated as 0 remaining."""
     if period >= 5:
         return 0.0
     total_reg = 4 * 12 * 60  # 2880
     elapsed = (period - 1) * 12 * 60 + (12 * 60 - time_remaining_period_sec)
     return float(max(0.0, total_reg - elapsed))
 
-
 def compute_context_factors(margin: float, period: int, time_remaining_period_sec: float) -> Tuple[float, float, float]:
-    """
-    Compute the 3 simple context factors used in the app:
-
-    late_game_factor: ramps 0→1 in the final 3 minutes of regulation
-    trailing_factor : 0→1 based on how much we are trailing (0 if not trailing)
-    leading_factor  : 0→1 based on how much we are leading (0 if not leading)
-    """
+    """Compute the 3 simple context factors used in the app:"""
     T_left = total_time_remaining(period, time_remaining_period_sec)
 
     late_window = 180.0  # last 3 minutes
@@ -98,7 +49,6 @@ def compute_context_factors(margin: float, period: int, time_remaining_period_se
 
     return float(late_game_factor), float(trailing_factor), float(leading_factor)
 
-
 def label_context(late_game_factor: float, trailing_factor: float, leading_factor: float) -> str:
     if late_game_factor >= 0.5 and trailing_factor > 0:
         return "Late & trailing"
@@ -106,11 +56,7 @@ def label_context(late_game_factor: float, trailing_factor: float, leading_facto
         return "Late & leading"
     return "Normal context"
 
-
-# ---------------------------------------------------------------------
 # Core builders
-# ---------------------------------------------------------------------
-
 
 def build_ml_matchup_table(
     season: str,
@@ -119,19 +65,7 @@ def build_ml_matchup_table(
     w_off: float = 0.7,
     w_def: float = 0.3,
 ) -> pd.DataFrame:
-    """
-    Build the matchup table that contains BOTH:
-      - Baseline prediction (PPP_BASELINE)
-      - ML blend prediction (PPP_ML_BLEND)
-
-    It merges:
-      - our offense rows (team_df)
-      - opp defense rows (team_df)
-      - league anchors (league_df)
-      - offline ML predictions (ml_offense_ppp_predictions.csv)
-
-    Returns: one row per PLAY_TYPE with the columns needed for context adjustments.
-    """
+    """Build the matchup table that contains BOTH:"""
     team_df = _rec.team_df.copy()
     league_df = _rec.league_df.copy()
 
@@ -212,26 +146,13 @@ def build_ml_matchup_table(
 
     return merged.reset_index(drop=True)
 
-
 def apply_context_adjustments(
     df: pd.DataFrame,
     margin: float,
     period: int,
     time_remaining_period_sec: float,
 ) -> pd.DataFrame:
-    """
-    Apply small, transparent context adjustments and compute PPP_CONTEXT.
-
-    Adjustments are intentionally small (few hundredths of PPP max) so they:
-    - meaningfully change ranking in edge cases,
-    - but do not “override the data”.
-
-    Adds:
-      QUICK_PRIORITY, BONUS_QUICK, BONUS_SCORE, PENALTY_PROTECT
-      CONTEXT_ADJ, PPP_CONTEXT, DELTA_VS_BASELINE
-      LATE_GAME_FACTOR, TRAILING_FACTOR, LEADING_FACTOR
-      CONTEXT_LABEL, RATIONALE
-    """
+    """Apply small, transparent context adjustments and compute PPP_CONTEXT."""
     out = df.copy()
 
     late_game_factor, trailing_factor, leading_factor = compute_context_factors(
@@ -288,7 +209,6 @@ def apply_context_adjustments(
     out["RATIONALE"] = out.apply(rationale, axis=1)
     return out
 
-
 def rank_ml_with_context(
     season: str,
     our_team: str,
@@ -300,12 +220,7 @@ def rank_ml_with_context(
     w_off: float = 0.7,
     w_def: float = 0.3,
 ) -> pd.DataFrame:
-    """
-    Full AI use case ranking:
-      1) Build matchup with ML blend + baseline (for delta comparison)
-      2) Apply context adjustments
-      3) Sort and return top-k by PPP_CONTEXT
-    """
+    """Full AI use case ranking:"""
     df = build_ml_matchup_table(
         season=season,
         our_team=our_team,
@@ -321,20 +236,3 @@ def rank_ml_with_context(
     )
     df = df.sort_values(["PPP_CONTEXT", "PPP_ML_BLEND"], ascending=False).reset_index(drop=True)
     return df.head(k)
-
-
-if __name__ == "__main__":
-    # Quick smoke test (won’t run unless you call this file directly)
-    try:
-        test = rank_ml_with_context(
-            season="2019-20",
-            our_team="LAL",
-            opp_team="BOS",
-            margin=-4,
-            period=4,
-            time_remaining_period_sec=90,
-            k=5,
-        )
-        print(test[["PLAY_TYPE", "PPP_CONTEXT", "PPP_ML_BLEND", "PPP_BASELINE", "DELTA_VS_BASELINE", "CONTEXT_LABEL"]])
-    except Exception as e:
-        print("Smoke test failed:", e)

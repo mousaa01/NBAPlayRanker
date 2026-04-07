@@ -1,5 +1,7 @@
 // Service layer for shot-analysis API helpers.
 export {
+  authenticatedDownload,
+  fetchMetaOptions,
   fetchPbpMetaOptions,
   fetchPbpShotsPreview,
   getPbpShotsCsvUrl,
@@ -8,4 +10,10 @@ export {
   getShotPlanPdfUrl,
   fetchShotModelMetrics,
   fetchShotMlAnalysis,
-} from "../utils";
+  type PbpMetaOptions,
+  type PbpShotsPreviewResponse,
+  type ShotHeatmapResponse,
+  type ShotModelMetricsResponse,
+  type ShotMlAnalysisResponse,
+  type ShotPlanRankResponse,
+} from "../infrastructure/api-client";

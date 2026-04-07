@@ -1,24 +1,23 @@
-# backend/pbp_endpoints.py
-
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
-from .pbp_shots import get_shots_csv_response, get_shots_json
-from .pbp_shotplan import get_shotplan_json, get_shotplan_meta_options
-from .pbp_viz import render_pbp_heatmap_base64
+from application.api_coordination.auth_dependency import require_auth, require_role
+
+from infrastructure.data_access import get_shots_csv_response, get_shots_json, render_pbp_heatmap_base64
+from application.recommendation_services.pbp_shotplan import get_shotplan_json, get_shotplan_meta_options
 
 router = APIRouter(prefix="/pbp", tags=["pbp"])
 
-from .pbp_phase2_endpoints import router as pbp_phase2_router
+from application.api_coordination.pbp_phase2_endpoints import router as pbp_phase2_router
 router.include_router(pbp_phase2_router)
 
 
-@router.get("/meta/options")
+@router.get("/meta/options", dependencies=[Depends(require_auth)])
 def pbp_meta_options() -> Dict[str, Any]:
     """
     Lightweight meta options for Dataset2 (PBP shots) so the frontend
@@ -33,7 +32,7 @@ def pbp_meta_options() -> Dict[str, Any]:
         )
 
 
-@router.get("/data/shots")
+@router.get("/data/shots", dependencies=[Depends(require_role("shot_analysis"))])
 def pbp_data_shots(
     season: str = Query(..., description="Season like 2021-22"),
     team: str = Query(..., description="Team abbreviation (our team) like TOR"),
@@ -58,7 +57,7 @@ def pbp_data_shots(
 
 
 # Compatibility alias: frontend pages call /pbp/shots/preview.
-@router.get("/shots/preview")
+@router.get("/shots/preview", dependencies=[Depends(require_role("shot_analysis"))])
 def pbp_shots_preview(
     season: str = Query(..., description="Season like 2021-22"),
     team: str = Query("", description="Team abbreviation (our team) like TOR"),
@@ -81,7 +80,7 @@ def pbp_shots_preview(
     return jsonable_encoder(payload)
 
 
-@router.get("/data/shots.csv")
+@router.get("/data/shots.csv", dependencies=[Depends(require_role("shot_analysis"))])
 def pbp_data_shots_csv(
     season: str = Query(...),
     team: str = Query(...),
@@ -101,7 +100,7 @@ def pbp_data_shots_csv(
 
 
 # Compatibility alias: frontend pages call /pbp/shots.csv.
-@router.get("/shots.csv")
+@router.get("/shots.csv", dependencies=[Depends(require_role("shot_analysis"))])
 def pbp_shots_csv(
     season: str = Query(...),
     team: str = Query(""),
@@ -123,7 +122,7 @@ def pbp_shots_csv(
     )
 
 
-@router.get("/shotplan")
+@router.get("/shotplan", dependencies=[Depends(require_role("shotplan"))])
 def pbp_shotplan(
     season: str = Query(...),
     our: str = Query(..., description="Our team abbreviation"),
@@ -136,7 +135,7 @@ def pbp_shotplan(
 
 
 # Compatibility alias: some callers expect /pbp/shotplan/rank
-@router.get("/shotplan/rank")
+@router.get("/shotplan/rank", dependencies=[Depends(require_role("shotplan"))])
 def pbp_shotplan_rank(
     season: str = Query(...),
     our: str = Query(..., description="Our team abbreviation"),
@@ -148,7 +147,7 @@ def pbp_shotplan_rank(
     return jsonable_encoder(payload)
 
 
-@router.get("/viz/shot-heatmap")
+@router.get("/viz/shot-heatmap", dependencies=[Depends(require_role("viz"))])
 def pbp_viz_shot_heatmap(
     season: str = Query(...),
     our: str = Query(...),
@@ -175,7 +174,7 @@ def pbp_viz_shot_heatmap(
 
 
 # Compatibility alias: some callers expect /pbp/viz/heatmap and send `team=`
-@router.get("/viz/heatmap")
+@router.get("/viz/heatmap", dependencies=[Depends(require_role("viz"))])
 def pbp_viz_heatmap(
     season: str = Query(...),
     team: str = Query(..., description="Team abbreviation (our team)"),

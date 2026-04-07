@@ -4,9 +4,7 @@ from typing import Iterable, Optional
 
 import math
 
-# ---------------------------------------------------------------------
 # Season mapping: parquet season ints -> "YYYY-YY"
-# ---------------------------------------------------------------------
 
 # Optional explicit overrides (edit if your parquet uses a nonstandard scheme).
 SEASON_OVERRIDES: dict[int, str] = {}
@@ -14,7 +12,6 @@ SEASON_OVERRIDES: dict[int, str] = {}
 # Most public NBA datasets encode season by the END year (e.g., 2021 -> 2020-21).
 # If your parquet already uses the START year (e.g., 2021 -> 2021-22), set this to False.
 SEASON_YEAR_IS_END: bool = True
-
 
 def season_int_to_str(season_value: Optional[object]) -> Optional[str]:
     if season_value is None:
@@ -40,17 +37,13 @@ def season_int_to_str(season_value: Optional[object]) -> Optional[str]:
 
     return f"{start}-{str(end)[-2:]}"
 
-
-# ---------------------------------------------------------------------
 # Zone mapping: (x, y) -> rim / paint / mid / corner3 / arc3
-# ---------------------------------------------------------------------
 
 RIM_RADIUS = 4.0
 PAINT_RADIUS = 12.0
 MID_RANGE_MAX = 22.0
 CORNER_Y_MIN = 22.0
 CORNER_X_MAX = 14.0
-
 
 def zone_from_xy(x: float, y: float, dist: Optional[float] = None) -> str:
     if dist is None:
@@ -69,11 +62,7 @@ def zone_from_xy(x: float, y: float, dist: Optional[float] = None) -> str:
         return "corner3"
     return "arc3"
 
-
-# ---------------------------------------------------------------------
 # Shot type normalization
-# ---------------------------------------------------------------------
-
 
 def _first_text(values: Iterable[Optional[str]]) -> str:
     for v in values:
@@ -83,7 +72,6 @@ def _first_text(values: Iterable[Optional[str]]) -> str:
         if s:
             return s
     return ""
-
 
 def normalize_shot_type(
     type_text: Optional[str] = None,

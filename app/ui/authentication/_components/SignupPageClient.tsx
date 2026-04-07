@@ -1,17 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { createClient } from "../../../../lib/supabase/client";
-
-type Role = "coach" | "analyst";
+import { useState } from "react";
+import { signUp, type UserRole } from "../../../infrastructure/auth";
 
 export default function SignupPageClient() {
-  const supabase = useMemo(() => createClient(), []);
-
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<Role>("coach");
+  const [role, setRole] = useState<UserRole>("coach");
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
@@ -23,25 +19,16 @@ export default function SignupPageClient() {
     setSuccess(false);
     setLoading(true);
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { role },
-        emailRedirectTo: `${window.location.origin}/auth/callback?next=/`,
-      },
-    });
-
-    if (error) {
-      setMessage(error.message);
+    try {
+      await signUp(email, password, role);
+      setMessage("Check your email to verify your account, then sign in.");
+      setSuccess(true);
+    } catch (err: unknown) {
+      setMessage(err instanceof Error ? err.message : "Sign-up failed.");
       setSuccess(false);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    setMessage("Check your email to verify your account, then sign in.");
-    setSuccess(true);
-    setLoading(false);
   }
 
   return (

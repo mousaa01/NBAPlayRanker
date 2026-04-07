@@ -1,16 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "../../../../lib/supabase/client";
-
-type UserRole = "coach" | "analyst";
+import { signIn } from "../../../infrastructure/auth";
 
 function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = useMemo(() => createClient(), []);
 
   const next = searchParams.get("next");
 
@@ -25,33 +22,14 @@ function LoginPageContent() {
     setMessage("");
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error || !data.user) {
-      setMessage(error?.message ?? "Unable to log in right now.");
+    try {
+      const { role } = await signIn(email, password);
+      router.push(next || (role === "coach" ? "/matchup" : "/data-explorer"));
+      router.refresh();
+    } catch (err: unknown) {
+      setMessage(err instanceof Error ? err.message : "Unable to log in right now.");
       setLoading(false);
-      return;
     }
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", data.user.id)
-      .single();
-
-    const metadataRole =
-      data.user.user_metadata?.role === "coach" ||
-      data.user.user_metadata?.role === "analyst"
-        ? (data.user.user_metadata.role as UserRole)
-        : null;
-
-    const role = ((profile?.role as UserRole | undefined) ?? metadataRole ?? "analyst") as UserRole;
-
-    router.push(next || (role === "coach" ? "/matchup" : "/data-explorer"));
-    router.refresh();
   }
 
   return (

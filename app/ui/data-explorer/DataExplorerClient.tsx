@@ -13,7 +13,7 @@ import {
   fetchPipelineInfo,
   fetchTeamPlaytypesPreview,
   getTeamPlaytypesCsvUrl,
-} from "../../utils";
+} from "../../services/dataExplorer";
 
 type MetaOptions = {
   seasons: string[];
@@ -69,10 +69,6 @@ function safeLocalSet(key: string, value: string) {
 }
 
 export default function DataExplorerClient() {
-  // --------------------------
-  // 1) Meta (dropdown data)
-  // I load seasons/teams/playtypes once so the filters are predictable and fast.
-  // --------------------------
   const [meta, setMeta] = useState<MetaOptions>({
     seasons: [],
     teams: [],
@@ -83,20 +79,12 @@ export default function DataExplorerClient() {
 
   const [pipeline, setPipeline] = useState<PipelineInfo | null>(null);
 
-  // --------------------------
-  // 2) Filters (this page’s “query builder”)
-  // These map directly to the preview/export endpoint, except for search/sort which are UI-only.
-  // --------------------------
   const [season, setSeason] = useState<string>("");
   const [team, setTeam] = useState<string>("");
   const [side, setSide] = useState<string>("offense");
   const [playType, setPlayType] = useState<string>(""); // blank means “all play types”
   const [minPoss, setMinPoss] = useState<number>(0);
   const [limit, setLimit] = useState<number>(200);
-
-  // --------------------------
-  // 3) Data + basic UI state
-  // --------------------------
   const [rows, setRows] = useState<TeamPlayRow[]>([]);
   const [totalRows, setTotalRows] = useState<number>(0);
   const [returnedRows, setReturnedRows] = useState<number>(0);
@@ -104,20 +92,15 @@ export default function DataExplorerClient() {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // UI-only controls (I’m not changing backend behavior here — just presentation)
+  // UI-only presentation controls
   const [sortKey, setSortKey] = useState<string>("PPP");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [search, setSearch] = useState<string>("");
   const [showPipeline, setShowPipeline] = useState<boolean>(true);
 
-  // I use request IDs so if a user changes filters quickly, stale responses don’t overwrite newer ones.
+  // Prevents stale responses when filters change rapidly.
   const requestIdRef = useRef(0);
   const didInitRef = useRef(false);
-
-  // --------------------------
-  // 4) Load meta + (optional) pipeline notes
-  // The pipeline panel is mainly for defense/explainability — not required to use the app.
-  // --------------------------
   useEffect(() => {
     let cancelled = false;
 
@@ -128,7 +111,7 @@ export default function DataExplorerClient() {
 
         setMeta(m);
 
-        // I pick defaults that make sense without the user touching anything:
+        // Sensible defaults so the page loads with data:
         // - most recent season
         // - TOR if available (nice for demos), otherwise first team
         const seasons = m.seasons ?? [];
@@ -156,11 +139,8 @@ export default function DataExplorerClient() {
       cancelled = true;
     };
   }, []);
-
-  // --------------------------
   // Restore UI prefs (purely convenience)
   // This does NOT change the API itself — it only restores how I was viewing the table last time.
-  // --------------------------
   useEffect(() => {
     if (didInitRef.current) return;
     didInitRef.current = true;
@@ -209,16 +189,12 @@ export default function DataExplorerClient() {
       })
     );
   }, [sortKey, sortDir, search, limit, minPoss, playType, side, showPipeline]);
-
-  // --------------------------
-  // 5) Fetch preview data when API-facing filters change
-  // Note: UI search/sort happens later and does NOT re-hit the backend.
-  // --------------------------
+  // Fetch when API-facing filters change; UI search/sort is client-side only.
   useEffect(() => {
     let cancelled = false;
 
     async function run() {
-      // I don’t call the endpoint until we at least know the season.
+
       if (!season) return;
 
       const myId = ++requestIdRef.current;
@@ -260,11 +236,6 @@ export default function DataExplorerClient() {
       cancelled = true;
     };
   }, [season, team, side, playType, minPoss, limit]);
-
-  // --------------------------
-  // 6) CSV export URL (matches filters)
-  // I bump the export cap so people can grab more than the on-screen preview.
-  // --------------------------
   const csvUrl = useMemo(() => {
     return getTeamPlaytypesCsvUrl({
       season: season || undefined,
@@ -276,11 +247,6 @@ export default function DataExplorerClient() {
     });
   }, [season, team, side, playType, minPoss, limit]);
 
-  // --------------------------
-  // 7) Columns shown in the table
-  // I keep it “committee-friendly”: a tight set of fields they’ll recognize quickly.
-  // Also, I only show columns that actually exist in the returned payload.
-  // --------------------------
   const columns = useMemo(() => {
     const base = [
       { key: "PLAY_TYPE", label: "Play Type" },
@@ -303,11 +269,7 @@ export default function DataExplorerClient() {
     const name = meta.teamNames?.[team];
     return name ? `${team} (${name})` : team;
   }, [meta.teamNames, team]);
-
-  // --------------------------
-  // UI-only: search + sort on the rows we already fetched
-  // Important: I’m NOT changing the API output here — just helping people scan the preview faster.
-  // --------------------------
+  // Client-side search + sort on already-fetched rows.
   const viewRows = useMemo(() => {
     const list = Array.isArray(rows) ? rows : [];
     const q = search.trim().toLowerCase();
@@ -341,11 +303,8 @@ export default function DataExplorerClient() {
 
     return sorted;
   }, [rows, search, sortKey, sortDir]);
-
-  // --------------------------
   // KPI tiles (based on what’s currently visible after UI filtering)
   // These are just quick sanity-check stats for the preview.
-  // --------------------------
   const kpis = useMemo(() => {
     const list = viewRows;
     const poss = list.map((r) => Number(r.POSS)).filter((x) => Number.isFinite(x));
@@ -363,15 +322,11 @@ export default function DataExplorerClient() {
       minPPP,
     };
   }, [viewRows]);
-
-  // --------------------------
-  // Tiny “quality bar” for avg PPP (visual only)
-  // I map a typical PPP band to a 0–100 bar so it’s easy to read at a glance.
-  // --------------------------
+  // PPP quality bar (visual only)
   const pppBar = useMemo(() => {
     const v = Number(kpis.avgPPP);
-    if (!Number.isFinite(v)) return { pct: 0, label: "—" };
-    // Typical PPP range I see is around [0.7 .. 1.3]
+    if (!Number.isFinite(v)) return { pct: 0, label: "\u2014" };
+    // Typical PPP range ~[0.7 .. 1.3]
     const pct = clamp01((v - 0.7) / 0.6) * 100;
     return { pct, label: fmtNum(v, 3) };
   }, [kpis.avgPPP]);
@@ -384,8 +339,7 @@ export default function DataExplorerClient() {
     border: "1px solid rgba(255,255,255,0.10)",
   };
 
-  // I generate the exact URL for the current preview so someone can copy/paste it
-  // and reproduce the same request outside the UI.
+  // Reproducible API URL for the current filters.
   const apiExample = useMemo(() => {
     const parts: string[] = [];
     parts.push(`${API_BASE}/data/team-playtypes?season=${season}`);

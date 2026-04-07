@@ -1,19 +1,4 @@
-# backend/pbp_shotplan.py
-
-"""Dataset2 Shot Plan helpers for the /pbp router.
-
-This module is intentionally **thin**:
-
-* Reuses the already-working :class:`ShotBaselineRecommender` (also used by the
-  root endpoint ``GET /shotplan/rank`` defined in ``backend/app.py``).
-* Provides a lightweight ``/pbp/meta/options`` payload for UI dropdowns.
-* Avoids scanning the big canonical parquet on each request. All meta/options
-  come from the small pre-aggregated parquet produced by Phase 1.
-
-STRICT RULES:
-- Do not change Dataset1 behavior.
-- Keep Dataset2 assets under backend/data/pbp/ and caches under backend/data/pbp/cache/.
-"""
+"""Shot Plan helpers for the /pbp router."""
 
 from __future__ import annotations
 
@@ -21,9 +6,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from domain.baseline_recommendation.shot_baseline_recommender import ShotBaselineRecommender
+from domain.baseline_recommendation import ShotBaselineRecommender
 
-# Singleton (fast startup + no repeated parquet reads)
 _REC: Optional[ShotBaselineRecommender] = None
 
 

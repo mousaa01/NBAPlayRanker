@@ -1,4 +1,3 @@
-# backend/viz_shot_heatmap.py
 from __future__ import annotations
 
 import base64

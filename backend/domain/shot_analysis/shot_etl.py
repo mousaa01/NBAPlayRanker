@@ -9,9 +9,7 @@ import pandas as pd
 
 from domain.shot_analysis.shot_config import normalize_shot_type, season_int_to_str, zone_from_xy
 
-# ---------------------------------------------------------------------
 # Paths (relative to backend/)
-# ---------------------------------------------------------------------
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 PBP_DIR = DATA_DIR / "pbp"
@@ -19,10 +17,8 @@ SOURCE_PARQUET = PBP_DIR / "nba_pbp_2021_present.parquet"
 ALT_SOURCE_PARQUET = DATA_DIR / "nba_pbp_2021_present.parquet"
 CLEAN_PARQUET = PBP_DIR / "shots_clean.parquet"
 
-# ---------------------------------------------------------------------
 # NBA team id -> abbreviation (common across NBA API datasets)
 # Used only as a fallback if the dataset doesn't provide abbreviations.
-# ---------------------------------------------------------------------
 
 TEAM_ID_TO_ABBR = {
     1610612737: "ATL",
@@ -57,16 +53,13 @@ TEAM_ID_TO_ABBR = {
     1610612766: "CHA",
 }
 
-
 def _norm_letters(s: str) -> str:
     # Lowercase and keep only letters (removes underscores, spaces, digits, etc.)
     return re.sub(r"[^a-z]+", "", str(s).lower())
 
-
 def _norm_alnum(s: str) -> str:
     # Lowercase and keep letters+digits (useful for some schemas)
     return re.sub(r"[^a-z0-9]+", "", str(s).lower())
-
 
 def _pick_col(
     df: pd.DataFrame,
@@ -74,16 +67,7 @@ def _pick_col(
     required: bool = False,
     prefer: Sequence[str] = (),
 ) -> Optional[str]:
-    """
-    Pick a column from df that matches one of the candidate names.
-
-    Matching strategy (in order):
-    1) Exact match
-    2) Case-insensitive exact match
-    3) Normalized alnum exact match
-    4) Normalized letters-only exact match
-    5) Normalized substring match (best-scored among matches)
-    """
+    """Pick a column from df that matches one of the candidate names."""
     cols = list(df.columns)
     if not cols:
         if required:
@@ -150,7 +134,6 @@ def _pick_col(
         )
     return None
 
-
 def _coerce_bool(s: pd.Series) -> pd.Series:
     if s.dtype == bool:
         return s
@@ -158,7 +141,6 @@ def _coerce_bool(s: pd.Series) -> pd.Series:
         return s.fillna(0).astype(float) > 0
     s_str = s.astype(str).str.strip().str.lower()
     return s_str.isin({"1", "true", "t", "yes", "y"})
-
 
 def _coerce_made(s: pd.Series) -> pd.Series:
     if s.dtype == bool:
@@ -170,7 +152,6 @@ def _coerce_made(s: pd.Series) -> pd.Series:
     miss = s_str.isin({"0", "false", "f", "miss", "missed", "no"})
     out = pd.Series(np.where(made, 1, np.where(miss, 0, np.nan)), index=s.index)
     return out.fillna(0).astype(int)
-
 
 def _parse_clock_to_sec(val: object) -> float:
     if val is None or (isinstance(val, float) and np.isnan(val)):
@@ -191,7 +172,6 @@ def _parse_clock_to_sec(val: object) -> float:
     except Exception:
         return float("nan")
 
-
 def _parse_margin(val: object) -> float:
     if val is None or (isinstance(val, float) and np.isnan(val)):
         return float("nan")
@@ -205,14 +185,11 @@ def _parse_margin(val: object) -> float:
     except Exception:
         return float("nan")
 
-
 def _compute_distance(x: pd.Series, y: pd.Series) -> pd.Series:
     return np.sqrt(x.astype(float) ** 2 + y.astype(float) ** 2)
 
-
 def _compute_angle_deg(x: pd.Series, y: pd.Series) -> pd.Series:
     return np.degrees(np.arctan2(y.astype(float), x.astype(float)))
-
 
 def _normalize_shot_type_from_row(row: pd.Series) -> str:
     return normalize_shot_type(
@@ -220,7 +197,6 @@ def _normalize_shot_type_from_row(row: pd.Series) -> str:
         type_abbreviation=row.get("type_abbreviation"),
         text=row.get("text"),
     )
-
 
 def _map_team_id_to_abbr(team_id_series: pd.Series) -> pd.Series:
     ids = pd.to_numeric(team_id_series, errors="coerce")
@@ -230,13 +206,9 @@ def _map_team_id_to_abbr(team_id_series: pd.Series) -> pd.Series:
     out = out.replace({"<NA>": None, "nan": None, "NaN": None})
     return out
 
-
 def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
     df = raw_df.copy()
-
-    # -----------------------------------------------------------------
     # Identify "shot attempt" rows
-    # -----------------------------------------------------------------
     shooting_col = _pick_col(
         df,
         [
@@ -262,15 +234,16 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
         msg = pd.to_numeric(df[msgtype_col], errors="coerce")
         df = df[msg.isin([1, 2])].copy()
 
-    # -----------------------------------------------------------------
+    # Exclude free throws (hoopR marks them as shooting_play=True)
+    _tt_col = _pick_col(df, ["type_text", "shot_type", "event_subtype"], required=False)
+    if _tt_col is not None:
+        _ft_mask = df[_tt_col].astype(str).str.contains("Free Throw", case=False, na=False)
+        if _ft_mask.any():
+            df = df[~_ft_mask].copy()
     # Season
-    # -----------------------------------------------------------------
     season_col = _pick_col(df, ["season", "season_year", "season_int", "seasonyear"], required=True)
     df["SEASON_STR"] = df[season_col].apply(season_int_to_str)
-
-    # -----------------------------------------------------------------
     # Team abbreviation (robust)
-    # -----------------------------------------------------------------
     team_col = _pick_col(
         df,
         [
@@ -314,10 +287,7 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
             prefer=["player1", "offense", "possession"],
         )
         df["TEAM_ABBR"] = _map_team_id_to_abbr(df[team_id_col])
-
-    # -----------------------------------------------------------------
     # Home flag
-    # -----------------------------------------------------------------
     home_flag_col = _pick_col(df, ["home_flag", "is_home", "team_is_home", "home"], required=False)
     if home_flag_col:
         df["HOME_FLAG"] = _coerce_bool(df[home_flag_col])
@@ -331,10 +301,7 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
             df["HOME_FLAG"] = df[home_team_col].astype(str).str.strip().eq(df["TEAM_ABBR"])
         else:
             df["HOME_FLAG"] = False
-
-    # -----------------------------------------------------------------
     # Opponent abbreviation
-    # -----------------------------------------------------------------
     opp_col = _pick_col(
         df,
         [
@@ -389,10 +356,7 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
                 df["OPP_ABBR"] = _map_team_id_to_abbr(df[opp_id_col])
             else:
                 df["OPP_ABBR"] = None
-
-    # -----------------------------------------------------------------
     # Shot type normalization
-    # -----------------------------------------------------------------
     type_text_col = _pick_col(df, ["type_text", "shot_type", "event_subtype", "eventsubtype"], required=False)
     type_abbrev_col = _pick_col(df, ["type_abbreviation", "type_abbrev", "shot_type_abbr"], required=False)
     text_col = _pick_col(df, ["text", "description", "event_description", "homedescription", "visitordescription"], required=False)
@@ -401,10 +365,7 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
     df["type_abbreviation"] = df[type_abbrev_col] if type_abbrev_col else None
     df["text"] = df[text_col] if text_col else None
     df["SHOT_TYPE"] = df.apply(_normalize_shot_type_from_row, axis=1)
-
-    # -----------------------------------------------------------------
     # Coordinates
-    # -----------------------------------------------------------------
     x_col = _pick_col(
         df,
         ["x", "x_loc", "loc_x", "coordinate_x", "shot_x", "locx", "shotx", "xcoordinate"],
@@ -417,35 +378,45 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
     )
     df["X"] = pd.to_numeric(df[x_col], errors="coerce")
     df["Y"] = pd.to_numeric(df[y_col], errors="coerce")
-
-    # -----------------------------------------------------------------
     # Shot distance
-    # -----------------------------------------------------------------
     dist_col = _pick_col(df, ["shot_distance", "dist", "distance"], required=False)
     if dist_col:
         df["DIST"] = pd.to_numeric(df[dist_col], errors="coerce")
     else:
-        df["DIST"] = _compute_distance(df["X"], df["Y"])
+        # Detect full-court coordinates (hoopR): X spans both halves of court.
+        # Basket is at (±41.75, 0).  Compute distance from nearest basket.
+        x_range = df["X"].max() - df["X"].min()
+        if x_range > 60:  # full-court (94-ft court → range ~90+)
+            _BASKET_X = 41.75
+            x_abs = df["X"].abs()
+            df["DIST"] = np.sqrt((x_abs - _BASKET_X) ** 2 + df["Y"] ** 2)
+        else:
+            df["DIST"] = _compute_distance(df["X"], df["Y"])
 
     df["ANGLE"] = _compute_angle_deg(df["X"], df["Y"])
-
-    # -----------------------------------------------------------------
-    # Shot value (2 or 3)
-    # -----------------------------------------------------------------
-    shot_value_col = _pick_col(df, ["shot_value", "shot_pts", "value", "shot_value_pts"], required=False)
+    # Shot value (2 or 3) — avoid generic "value" which substring-matches hoopR's score_value
+    shot_value_col = _pick_col(df, ["shot_value", "shot_pts", "shot_value_pts"], required=False)
     is_three_col = _pick_col(df, ["is_three", "is_three_shot", "three_point_attempt"], required=False)
+
+    # hoopR score_value: 0 for misses, 2/3 for makes
+    score_value_col = _pick_col(df, ["score_value"], required=False)
 
     if shot_value_col:
         df["SHOT_VALUE"] = pd.to_numeric(df[shot_value_col], errors="coerce")
     elif is_three_col:
         df["SHOT_VALUE"] = np.where(_coerce_bool(df[is_three_col]), 3, 2)
+    elif score_value_col is not None:
+        sv = pd.to_numeric(df[score_value_col], errors="coerce").fillna(0).astype(int)
+        # For makes (score_value 2 or 3) trust the value; for misses use distance
+        df["SHOT_VALUE"] = np.where(
+            sv.isin([2, 3]), sv,
+            np.where(df["DIST"].fillna(0) >= 22.0, 3, 2)
+        )
     else:
         df["SHOT_VALUE"] = np.where(df["DIST"].fillna(0) >= 22.0, 3, 2)
-
-    # -----------------------------------------------------------------
     # Made / Points
-    # -----------------------------------------------------------------
-    made_col = _pick_col(df, ["shot_made", "shot_made_flag", "made", "is_made", "shot_result"], required=False)
+    # "scoring_play" is the hoopR column (boolean: TRUE if made)
+    made_col = _pick_col(df, ["shot_made", "shot_made_flag", "made", "is_made", "shot_result", "scoring_play"], required=False)
     if made_col:
         df["MADE"] = _coerce_made(df[made_col])
     else:
@@ -462,10 +433,7 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
             df["MADE"] = 0
 
     df["POINTS"] = df["SHOT_VALUE"].fillna(0).astype(int) * df["MADE"].fillna(0).astype(int)
-
-    # -----------------------------------------------------------------
     # Period + clock
-    # -----------------------------------------------------------------
     period_col = _pick_col(df, ["period", "period_number"], required=False)
     df["PERIOD"] = pd.to_numeric(df[period_col], errors="coerce") if period_col else np.nan
 
@@ -478,19 +446,13 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
         df["CLOCK_SEC"] = df[clock_col].apply(_parse_clock_to_sec)
     else:
         df["CLOCK_SEC"] = np.nan
-
-    # -----------------------------------------------------------------
     # Margin
-    # -----------------------------------------------------------------
     margin_col = _pick_col(df, ["score_margin", "margin", "score_diff", "scoremargin"], required=False)
     if margin_col:
         df["MARGIN"] = df[margin_col].apply(_parse_margin)
     else:
         df["MARGIN"] = np.nan
-
-    # -----------------------------------------------------------------
     # IDs
-    # -----------------------------------------------------------------
     game_id_col = _pick_col(df, ["game_id", "gameid", "gameId", "GAME_ID"], required=True)
     df["GAME_ID"] = df[game_id_col].astype(str).str.strip()
 
@@ -511,10 +473,7 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
         prefer=["player1", "shooter", "athlete1", "person1"],
     )
     df["SHOOTER_ID"] = df[shooter_col].astype(str).str.strip() if shooter_col else None
-
-    # -----------------------------------------------------------------
     # Zone
-    # -----------------------------------------------------------------
     df["ZONE"] = [
         zone_from_xy(x, y, d) if np.isfinite(x) and np.isfinite(y) else "unknown"
         for x, y, d in zip(df["X"], df["Y"], df["DIST"])
@@ -553,7 +512,6 @@ def build_shots_clean(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     return clean
 
-
 def build_shots_dataset(
     parquet_path: Path = SOURCE_PARQUET,
     output_path: Path = CLEAN_PARQUET,
@@ -580,7 +538,6 @@ def build_shots_dataset(
     print(f"[shot_etl] Saved: {output_path}")
 
     return output_path
-
 
 if __name__ == "__main__":
     build_shots_dataset()

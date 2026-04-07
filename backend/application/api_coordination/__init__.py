@@ -1,1 +1,1 @@
-# Application layer - API Coordination subsystem
+"""API coordination package."""
